@@ -4,7 +4,7 @@
 //!
 //! ```text
 //! ┌─────────────────────────────────────────────────────────────────┐
-//! │ Magic      4 bytes  "CRY\x01"  (catches wrong-file mistakes)   │
+//! │ Magic      4 bytes  "CRY\x01"  (catches wrong-file mistakes)    │
 //! │ Algorithm  1 byte   AlgoId enum                                 │
 //! │ Salt       16 bytes Argon2 salt (random per file)               │
 //! │ Nonce      12 bytes AEAD nonce  (random per file)               │
