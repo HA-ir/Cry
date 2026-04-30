@@ -1,116 +1,116 @@
-# cry 🔐
+# cry 🔐  v0.2.0
 
 A fast, minimal CLI cryptography tool written in Rust.
 
-## Features
+## What's new in v0.2
 
-- **AES-256-GCM** authenticated encryption (default)
-- Built-in key generation — no external tools needed
-- Extensible algorithm design — add new ciphers in one place
-- Clean error messages
-- Zero unsafe code
+| # | Improvement |
+|---|-------------|
+| 1 | **Passphrase + Argon2id KDF** — no raw key files needed |
+| 2 | **Authenticated file header** — magic bytes, algo ID, salt, nonce |
+| 3 | **Zeroizing key memory** — key bytes wiped from RAM on drop |
+| 4 | **Auto-detect algorithm on decrypt** — stored in header, no `-a` needed |
+| 5 | **Streaming encryption** — 1 MiB chunks, handles files of any size |
+| 6 | **Key fingerprint** — SHA-256 digest printed after `cry -kg` |
+| + | **ChaCha20-Poly1305** added as second algorithm |
 
 ---
 
 ## Build
 
-```bash
+```
 cargo build --release
-# Binary at: ./target/release/cry
 ```
 
 ---
 
 ## Usage
 
-### Generate a key
-
-```bash
-cry -kg -o my.key            # generate a random 32-byte key (OsRng)
-cry -kg -o my.key --force    # overwrite an existing key file
-```
-
-Aliases: `-kg`, `kg`, `keygen`
-
 ### Encrypt
 
-```bash
-cry -en -p /path/to/plain.txt -k /path/to/my.key -c /path/to/output.enc
+```
+cry -en -p secret.txt -c secret.cry
+```
+
+Prompts for a passphrase (with confirmation). Algorithm defaults to AES-256-GCM.
+
+```
+cry -en -p secret.txt -c secret.cry -a chacha20poly1305
 ```
 
 ### Decrypt
 
-```bash
-cry -de -p /path/to/recovered.txt -k /path/to/my.key -c /path/to/output.enc
 ```
+cry -de -c secret.cry -p recovered.txt
+```
+
+The algorithm is read automatically from the file header — no `-a` flag needed.
+
+### Generate a raw key file (optional)
+
+```
+cry -kg -o my.key
+cry -kg -o my.key --force    # overwrite existing
+```
+
+Prints a SHA-256 fingerprint so you can verify the right key is in use later.
 
 ### All command aliases
 
-```bash
-cry -en ...      # short flag
-cry en  ...      # no dash
-cry encrypt ...  # full word
-
-cry -de ...
-cry de  ...
-cry decrypt ...
-
-cry -kg -o my.key
-cry kg  -o my.key
-cry keygen -o my.key
 ```
-
-### Choose algorithm explicitly
-
-```bash
-cry -en -p plain.txt -k my.key -c out.enc -a aes256gcm
+cry -en / en / encrypt
+cry -de / de / decrypt
+cry -kg / kg / keygen
 ```
 
 ---
 
-## File format (AES-256-GCM)
+## File format
 
 ```
-[ 12-byte random nonce ][ ciphertext + 16-byte GCM auth tag ]
+┌─────────────────────────────────────────────────────────┐
+│ Header  33 bytes                                        │
+│   Magic      4 bytes  "CRY\x01"                        │
+│   AlgoID     1 byte   0x01=AES-256-GCM                 │
+│                       0x02=ChaCha20-Poly1305            │
+│   Salt      16 bytes  Argon2 salt (random per file)     │
+│   Nonce     12 bytes  AEAD base nonce (random per file) │
+├─────────────────────────────────────────────────────────┤
+│ Chunks  (repeated)                                      │
+│   Length     4 bytes  u32 big-endian                    │
+│   Data       N bytes  AEAD ciphertext + 16-byte tag     │
+└─────────────────────────────────────────────────────────┘
 ```
 
-The nonce is randomly generated per encryption call and prepended to the
-output file. The GCM tag authenticates the ciphertext and provides tamper
-detection — decryption fails loudly on any corruption or wrong key.
+Each 1 MiB chunk has its own authentication tag. The chunk nonce is derived
+from the base nonce XOR'd with the chunk index, preventing reordering attacks.
+
+---
+
+## KDF parameters (Argon2id)
+
+| Parameter   | Value  | Rationale                         |
+|-------------|--------|-----------------------------------|
+| Memory      | 64 MiB | OWASP recommended minimum         |
+| Iterations  | 3      | OWASP recommended minimum         |
+| Parallelism | 1      | Single-threaded, portable          |
+| Output      | 32 B   | 256-bit key for AES-256 / ChaCha  |
 
 ---
 
 ## Adding a new algorithm
 
-1. Add a variant to `Algorithm` in `src/cipher.rs`:
-
-```rust
-#[value(name = "chacha20poly1305", alias = "chacha")]
-ChaCha20Poly1305,
-```
-
-2. Add the crate to `Cargo.toml`:
-
-```toml
-chacha20poly1305 = "0.10"
-```
-
-3. Implement `chacha20poly1305_encrypt` / `chacha20poly1305_decrypt`
-   following the same pattern as the AES-256-GCM functions.
-
-4. Wire up the new variant in the `match algorithm { ... }` blocks
-   inside `encrypt_file` and `decrypt_file`.
-
-The CLI picks up the new `--algorithm` flag value automatically via
-`clap`'s `ValueEnum` derive.
+1. Add a variant to `Algorithm` in `src/cipher.rs` and `AlgoId` in `src/header.rs`.
+2. Add the crate to `Cargo.toml`.
+3. Implement `encrypt_chunk` / `decrypt_chunk` arms for the new variant.
+4. The CLI picks it up automatically via `clap`'s `ValueEnum` derive.
 
 ---
 
 ## Security notes
 
-- The key file must be exactly **32 bytes** (256 bits).
-- Keys are generated using `OsRng` — the OS's CSPRNG.
-- On Unix, generated key files are chmod'd to **600** (owner read/write only).
-- AES-256-GCM authenticated encryption means decryption fails loudly if
-  the file has been tampered with or the wrong key is used.
-- Keep key files out of version control — add `*.key` to `.gitignore`.
+- Passphrases are read with `rpassword` (no terminal echo).
+- All key material uses `Zeroizing<T>` — wiped from memory on drop.
+- The file header is not encrypted but contains only random salts/nonces.
+- Decryption fails loudly on any wrong passphrase, corruption, or tampering.
+- Keep backups — there is no key recovery mechanism.
