@@ -70,8 +70,8 @@ cry -kg / kg / keygen
 ```
 ┌─────────────────────────────────────────────────────────┐
 │ Header  33 bytes                                        │
-│   Magic      4 bytes  "CRY\x01"                        │
-│   AlgoID     1 byte   0x01=AES-256-GCM                 │
+│   Magic      4 bytes  "CRY\x01"                         │
+│   AlgoID     1 byte   0x01=AES-256-GCM                  │
 │                       0x02=ChaCha20-Poly1305            │
 │   Salt      16 bytes  Argon2 salt (random per file)     │
 │   Nonce     12 bytes  AEAD base nonce (random per file) │
@@ -93,7 +93,7 @@ from the base nonce XOR'd with the chunk index, preventing reordering attacks.
 |-------------|--------|-----------------------------------|
 | Memory      | 64 MiB | OWASP recommended minimum         |
 | Iterations  | 3      | OWASP recommended minimum         |
-| Parallelism | 1      | Single-threaded, portable          |
+| Parallelism | 1      | Single-threaded, portable         |
 | Output      | 32 B   | 256-bit key for AES-256 / ChaCha  |
 
 ---

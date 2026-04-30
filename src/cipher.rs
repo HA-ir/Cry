@@ -9,8 +9,8 @@
 //!
 //! ```text
 //! ┌──────────────────────────────────────────┐
-//! │ length   4 bytes  u32 big-endian          │  ← ciphertext + tag length
-//! │ data     N bytes  AEAD ciphertext + tag   │
+//! │ length   4 bytes  u32 big-endian         │  ← ciphertext + tag length
+//! │ data     N bytes  AEAD ciphertext + tag  │
 //! └──────────────────────────────────────────┘
 //! ```
 //!
