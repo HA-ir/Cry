@@ -1,0 +1,30 @@
+[package]
+name = "cry"
+version = "0.1.0"
+edition = "2024"
+description = "A CLI cryptography tool supporting AES-256 and more"
+authors = ["you"]
+ 
+[[bin]]
+name = "cry"
+path = "src/main.rs"
+ 
+[dependencies]
+# CLI argument parsing
+clap = { version = "4", features = ["derive"] }
+ 
+# AES-256-GCM encryption (authenticated encryption)
+aes-gcm = "0.10"
+ 
+# Secure random number generation (for nonce/salt)
+rand = "0.8"
+ 
+# Key derivation from passphrase (optional future use)
+# pbkdf2 = "0.12"
+# sha2 = "0.10"
+# hmac = "0.12"
+ 
+# Error handling
+anyhow = "1"
+thiserror = "1"
+ 
