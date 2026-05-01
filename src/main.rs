@@ -30,11 +30,13 @@ macro_rules! style {
 }
 
 fn banner() {
+    /*
     eprintln!(
         "\n{}  {}",
         style!(bold "╔═╗ ╦═╗ ╦ ╦"),
         style!(dim "v") ,
     );
+    */
     // Simpler banner that's definitely valid
     let ver = env!("CARGO_PKG_VERSION");
     eprintln!(
