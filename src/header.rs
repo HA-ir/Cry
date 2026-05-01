@@ -4,7 +4,7 @@
 //!
 //! ```text
 //! ┌──────────────────────────────────────────────────────────────────────┐
-//! │ Magic        4 bytes   "CRY\x02"  (version bump from v0.1)          │
+//! │ Magic        4 bytes   "CRY\x02"  (version bump from v0.1)           │
 //! │ Algorithm    1 byte    AlgoId enum                                   │
 //! │ Salt        16 bytes   Argon2 salt (random per file)                 │
 //! │ Nonce       12 bytes   AEAD base nonce (random per file)             │
