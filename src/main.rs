@@ -1,21 +1,77 @@
+//! `cry` — a fast, minimal CLI cryptography tool.
+//!
+//! Supported algorithms: AES-256-GCM, ChaCha20-Poly1305
+//! Key derivation: Argon2id (64 MiB, 3 iterations)
+
 mod cipher;
+mod error;
 mod header;
 mod kdf;
 mod keygen;
 
-use clap::{CommandFactory, Parser};
 use std::path::PathBuf;
+
+use clap::{CommandFactory, Parser};
 use zeroize::Zeroizing;
 
-use cipher::{Algorithm, decrypt_file, encrypt_file};
+use cipher::{decrypt_file, encrypt_file, Algorithm};
+use error::CryError;
 
-/// cry — a cryptography CLI tool
+// ── ANSI colour helpers ───────────────────────────────────────────────────────
+
+macro_rules! style {
+    (bold    $s:expr) => { concat!("\x1b[1m",    $s, "\x1b[0m") };
+    (dim     $s:expr) => { concat!("\x1b[2m",    $s, "\x1b[0m") };
+    (cyan    $s:expr) => { concat!("\x1b[36m",   $s, "\x1b[0m") };
+    (green   $s:expr) => { concat!("\x1b[32m",   $s, "\x1b[0m") };
+    (yellow  $s:expr) => { concat!("\x1b[33m",   $s, "\x1b[0m") };
+    (red     $s:expr) => { concat!("\x1b[31m",   $s, "\x1b[0m") };
+    (magenta $s:expr) => { concat!("\x1b[35m",   $s, "\x1b[0m") };
+}
+
+fn banner() {
+    eprintln!(
+        "\n{}  {}",
+        style!(bold "╔═╗ ╦═╗ ╦ ╦"),
+        style!(dim "v") ,
+    );
+    // Simpler banner that's definitely valid
+    let ver = env!("CARGO_PKG_VERSION");
+    eprintln!(
+        "  {}  {}",
+        style!(bold "cry 🔐"),
+        format!("\x1b[2mv{ver}\x1b[0m")
+    );
+    eprintln!();
+}
+
+fn section(icon: &str, label: &str, value: &str) {
+    eprintln!(
+        "  {}  \x1b[2m{:<12}\x1b[0m  {}",
+        icon, label, value
+    );
+}
+
+fn divider() {
+    eprintln!("  \x1b[2m{}\x1b[0m", "─".repeat(48));
+}
+
+// ── CLI definition ────────────────────────────────────────────────────────────
+
+/// cry — encrypt and decrypt files with AES-256-GCM or ChaCha20-Poly1305
 #[derive(Parser, Debug)]
 #[command(
     name = "cry",
-    version = "0.2.0",
-    about = "Encrypt and decrypt files — AES-256-GCM or ChaCha20-Poly1305, passphrase-protected",
+    version = env!("CARGO_PKG_VERSION"),
+    about = "Encrypt and decrypt files — passphrase-protected, authenticated",
     long_about = None,
+    after_help = concat!(
+        "\x1b[2mExamples:\x1b[0m\n",
+        "  cry encrypt -p secret.txt -c secret.cry\n",
+        "  cry decrypt -c secret.cry -p recovered.txt\n",
+        "  cry encrypt -p secret.txt -c secret.cry -a chacha20poly1305\n",
+        "  cry keygen -o my.key\n",
+    )
 )]
 struct Cli {
     #[command(subcommand)]
@@ -25,28 +81,28 @@ struct Cli {
 #[derive(clap::Subcommand, Debug)]
 enum Command {
     /// Encrypt a plaintext file
-    #[command(name = "-en", alias = "en", alias = "encrypt")]
+    #[command(name = "encrypt", alias = "-en", alias = "en")]
     Encrypt(EncryptArgs),
 
-    /// Decrypt an encrypted file (algorithm detected automatically from file header)
-    #[command(name = "-de", alias = "de", alias = "decrypt")]
+    /// Decrypt an encrypted file (algorithm detected from header)
+    #[command(name = "decrypt", alias = "-de", alias = "de")]
     Decrypt(DecryptArgs),
 
     /// Generate a cryptographically secure random key file
-    #[command(name = "-kg", alias = "kg", alias = "keygen")]
+    #[command(name = "keygen", alias = "-kg", alias = "kg")]
     Keygen(KeygenArgs),
 }
 
-// ── Encrypt ──────────────────────────────────────────────────────────────────
+// ── Encrypt ───────────────────────────────────────────────────────────────────
 
 #[derive(clap::Args, Debug)]
 struct EncryptArgs {
-    /// Path to the plaintext file (input)
-    #[arg(short = 'p', long = "plain", value_name = "PLAIN_FILE")]
+    /// Plaintext input file  (use - for stdin)
+    #[arg(short = 'p', long = "plain", value_name = "FILE")]
     plain: PathBuf,
 
-    /// Path to the encrypted file (output)
-    #[arg(short = 'c', long = "cipher", value_name = "CIPHER_FILE")]
+    /// Encrypted output file
+    #[arg(short = 'c', long = "cipher", value_name = "FILE")]
     cipher: PathBuf,
 
     /// Encryption algorithm
@@ -58,34 +114,42 @@ struct EncryptArgs {
     )]
     algorithm: Algorithm,
 
-    /// Read passphrase from this env variable instead of prompting
-    #[arg(long = "pass-env", value_name = "VAR_NAME", hide = true)]
+    /// Read passphrase from this environment variable (useful in scripts)
+    #[arg(long = "pass-env", value_name = "VAR", help_heading = "Advanced")]
     pass_env: Option<String>,
+
+    /// Read passphrase from a file (first line used)
+    #[arg(long = "pass-file", value_name = "FILE", help_heading = "Advanced")]
+    pass_file: Option<PathBuf>,
 }
 
-// ── Decrypt ──────────────────────────────────────────────────────────────────
+// ── Decrypt ───────────────────────────────────────────────────────────────────
 
 #[derive(clap::Args, Debug)]
 struct DecryptArgs {
-    /// Path to the encrypted file (input)
-    #[arg(short = 'c', long = "cipher", value_name = "CIPHER_FILE")]
+    /// Encrypted input file
+    #[arg(short = 'c', long = "cipher", value_name = "FILE")]
     cipher: PathBuf,
 
-    /// Path to the plaintext file (output)
-    #[arg(short = 'p', long = "plain", value_name = "PLAIN_FILE")]
+    /// Plaintext output file
+    #[arg(short = 'p', long = "plain", value_name = "FILE")]
     plain: PathBuf,
 
-    /// Read passphrase from this env variable instead of prompting
-    #[arg(long = "pass-env", value_name = "VAR_NAME", hide = true)]
+    /// Read passphrase from this environment variable
+    #[arg(long = "pass-env", value_name = "VAR", help_heading = "Advanced")]
     pass_env: Option<String>,
+
+    /// Read passphrase from a file (first line used)
+    #[arg(long = "pass-file", value_name = "FILE", help_heading = "Advanced")]
+    pass_file: Option<PathBuf>,
 }
 
-// ── Keygen ───────────────────────────────────────────────────────────────────
+// ── Keygen ────────────────────────────────────────────────────────────────────
 
 #[derive(clap::Args, Debug)]
 struct KeygenArgs {
     /// Where to write the generated key
-    #[arg(short = 'o', long = "output", value_name = "KEY_FILE")]
+    #[arg(short = 'o', long = "output", value_name = "FILE")]
     output: PathBuf,
 
     /// Overwrite the output file if it already exists
@@ -100,79 +164,109 @@ fn main() {
 
     let Some(command) = cli.command else {
         Cli::command().print_help().unwrap();
-        println!();
+        eprintln!();
         return;
     };
 
-    let result = match command {
+    banner();
+
+    let result: Result<(), CryError> = match command {
         Command::Encrypt(args) => {
-            println!(
-                "🔒 Encrypting: {} → {}",
+            eprintln!(
+                "  🔒  \x1b[1mEncrypting\x1b[0m  {} \x1b[2m→\x1b[0m {}",
                 args.plain.display(),
                 args.cipher.display()
             );
-            let pass = read_passphrase(args.pass_env.as_deref(), true);
-            match pass {
-                Ok(p) => encrypt_file(&args.plain, &args.cipher, &p, args.algorithm),
-                Err(e) => Err(e),
-            }
+            section("⚙", "Algorithm", &args.algorithm.to_string());
+            section("🔑", "KDF", "Argon2id  (64 MiB · 3 iter · 1 thread)");
+            divider();
+
+            read_passphrase(args.pass_env.as_deref(), args.pass_file.as_deref(), true)
+                .and_then(|p| encrypt_file(&args.plain, &args.cipher, &p, args.algorithm))
         }
+
         Command::Decrypt(args) => {
-            println!(
-                "🔓 Decrypting: {} → {}",
+            eprintln!(
+                "  🔓  \x1b[1mDecrypting\x1b[0m  {} \x1b[2m→\x1b[0m {}",
                 args.cipher.display(),
                 args.plain.display()
             );
-            let pass = read_passphrase(args.pass_env.as_deref(), false);
-            match pass {
-                Ok(p) => decrypt_file(&args.plain, &args.cipher, &p),
-                Err(e) => Err(e),
-            }
+            section("🔑", "KDF", "Argon2id  (64 MiB · 3 iter · 1 thread)");
+            divider();
+
+            read_passphrase(args.pass_env.as_deref(), args.pass_file.as_deref(), false)
+                .and_then(|p| decrypt_file(&args.plain, &args.cipher, &p))
         }
+
         Command::Keygen(args) => {
-            println!("🔑 Generating key → {}", args.output.display());
+            eprintln!(
+                "  🎲  \x1b[1mGenerating key\x1b[0m  \x1b[2m→\x1b[0m {}",
+                args.output.display()
+            );
+            divider();
             keygen::generate_key(&args.output, args.force)
         }
     };
 
+    eprintln!();
     match result {
-        Ok(()) => println!("✅ Done."),
+        Ok(()) => eprintln!("  \x1b[32m✔\x1b[0m  Done."),
         Err(e) => {
-            eprintln!("❌ Error: {e}");
+            eprintln!("  \x1b[31m✘\x1b[0m  {e}");
             std::process::exit(1);
         }
     }
+    eprintln!();
 }
 
 // ── Passphrase helpers ────────────────────────────────────────────────────────
 
-/// Prompt for a passphrase (with confirmation on encrypt) or read from env var.
-/// Returns a `Zeroizing<Vec<u8>>` so memory is wiped on drop.
-fn read_passphrase(env_var: Option<&str>, confirm: bool) -> anyhow::Result<Zeroizing<Vec<u8>>> {
+/// Read a passphrase from (in priority order):
+///   1. an environment variable (`--pass-env VAR`)
+///   2. a file (`--pass-file PATH`, first line)
+///   3. an interactive terminal prompt (with optional confirmation)
+///
+/// Returns `Zeroizing<Vec<u8>>` so the bytes are wiped on drop.
+fn read_passphrase(
+    env_var: Option<&str>,
+    pass_file: Option<&std::path::Path>,
+    confirm: bool,
+) -> Result<Zeroizing<Vec<u8>>, CryError> {
+    // 1. Environment variable
     if let Some(var) = env_var {
-        let val = std::env::var(var)
-            .map_err(|_| anyhow::anyhow!("Environment variable '{var}' is not set"))?;
+        let val = std::env::var(var).map_err(|_| CryError::MissingEnvVar(var.to_string()))?;
         return Ok(Zeroizing::new(val.into_bytes()));
     }
 
+    // 2. Passphrase file
+    if let Some(path) = pass_file {
+        let contents = std::fs::read_to_string(path)?;
+        let first_line = contents.lines().next().unwrap_or("").to_string();
+        if first_line.is_empty() {
+            return Err(CryError::EmptyPassphrase);
+        }
+        return Ok(Zeroizing::new(first_line.into_bytes()));
+    }
+
+    // 3. Interactive prompt
     let pass = Zeroizing::new(
-        rpassword::prompt_password("  Passphrase: ")
-            .map_err(|e| anyhow::anyhow!("Failed to read passphrase: {e}"))?,
+        rpassword::prompt_password("  Passphrase : ")
+            .map_err(|e| CryError::Io(e))?,
     );
 
     if pass.is_empty() {
-        anyhow::bail!("Passphrase must not be empty.");
+        return Err(CryError::EmptyPassphrase);
     }
 
     if confirm {
-        let confirm = Zeroizing::new(
-            rpassword::prompt_password("  Confirm   : ")
-                .map_err(|e| anyhow::anyhow!("Failed to read passphrase: {e}"))?,
+        let confirm_pass = Zeroizing::new(
+            rpassword::prompt_password("  Confirm    : ")
+                .map_err(|e| CryError::Io(e))?,
         );
-        if *pass != *confirm {
-            anyhow::bail!("Passphrases do not match.");
+        if *pass != *confirm_pass {
+            return Err(CryError::PassphraseMismatch);
         }
     }
 
-    Ok(Zeroizing::new((*pass).clone().into_bytes()))
+    Ok(Zeroizing::new(pass.as_bytes().to_vec()))
 }

@@ -1,17 +1,42 @@
+//! Structured error types for `cry`.
+//!
+//! The library layer returns `CryError`; the CLI layer formats them for
+//! human consumption via the `Display` impl provided by `thiserror`.
+
 use thiserror::Error;
 
-/// Top-level errors for `cry`.
-///
-/// These are returned from the library layer; the CLI layer converts them
-/// to human-readable messages via the `Display` impl (provided by thiserror).
 #[derive(Debug, Error)]
 pub enum CryError {
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
 
-    #[error("Cryptography error: {0}")]
-    Crypto(String),
+    #[error("Decryption failed — wrong passphrase, corrupted file, or tampered ciphertext")]
+    DecryptionFailed,
 
-    #[error("Invalid key: {0}")]
-    InvalidKey(String),
+    #[error("Header authentication failed — file may have been tampered with")]
+    HeaderTampered,
+
+    #[error("File is truncated — expected {expected} chunks, got {got}")]
+    Truncated { expected: u64, got: u64 },
+
+    #[error("Invalid file format: {0}")]
+    InvalidFormat(String),
+
+    #[error("Key derivation failed: {0}")]
+    Kdf(String),
+
+    #[error("Output file already exists: '{0}'. Use --force to overwrite")]
+    FileExists(String),
+
+    #[error("Passphrase must not be empty")]
+    EmptyPassphrase,
+
+    #[error("Passphrases do not match")]
+    PassphraseMismatch,
+
+    #[error("Environment variable '{0}' is not set")]
+    MissingEnvVar(String),
+
+    #[error("Chunk {index} length {len} is suspiciously large — file may be corrupted")]
+    SuspiciousChunkLen { index: u64, len: usize },
 }

@@ -2,10 +2,9 @@
 name = "cry"
 version = "0.1.0"
 edition = "2024"
-description = "A CLI cryptography tool supporting AES-256 and more"
+description = "A fast, minimal CLI cryptography tool supporting AES-256-GCM and ChaCha20-Poly1305"
 authors = ["you"]
  
-
 [[bin]]
 name = "cry"
 path = "src/main.rs"
@@ -29,8 +28,11 @@ argon2 = "0.5"
 # Secure memory zeroing
 zeroize = { version = "1", features = ["derive"] }
  
-# SHA-256 for key fingerprint
+# SHA-256 for HMAC and fingerprint
 sha2 = "0.10"
+ 
+# HMAC for header authentication
+hmac = "0.12"
  
 # Error handling
 anyhow = "1"
