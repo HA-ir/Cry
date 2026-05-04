@@ -131,6 +131,16 @@ regardless of the base nonce bit pattern.
 
 ---
 
+### Benchmark performance
+
+```sh
+cry bench
+cry bench --size-mib 256 --kdf-runs 5
+```
+
+Prints quick local throughput estimates (MiB/s) for AES-256-GCM and
+ChaCha20-Poly1305 encrypt/decrypt, plus average Argon2id derivation time.
+
 ## Running tests
 
 ```sh

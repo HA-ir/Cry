@@ -10,13 +10,20 @@ mod kdf;
 mod keygen;
 
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 use clap::{CommandFactory, Parser};
 use zeroize::Zeroizing;
 
+use aes_gcm::aead::{Aead, KeyInit, Payload};
+use aes_gcm::{Aes256Gcm, Key as AesKey, Nonce as AesNonce};
+use chacha20poly1305::{ChaCha20Poly1305, Key as ChaChaKey, Nonce as ChaChaNonce};
 use cipher::{decrypt_file, encrypt_file};
 use error::CryError;
 use header::Algorithm;
+use kdf::derive_key;
+use rand::RngCore;
+use sha2::{Digest, Sha256};
 
 // ---------------------------------------------------------------------------
 // Banner / formatting helpers
@@ -72,6 +79,10 @@ enum Command {
     /// Generate a cryptographically secure random key file
     #[command(name = "keygen", alias = "-kg", alias = "kg")]
     Keygen(KeygenArgs),
+
+    /// Run quick crypto benchmarks
+    #[command(name = "bench")]
+    Bench(BenchArgs),
 }
 
 // ── Encrypt ───────────────────────────────────────────────────────────────────
@@ -138,6 +149,16 @@ struct KeygenArgs {
     force: bool,
 }
 
+#[derive(clap::Args, Debug)]
+struct BenchArgs {
+    /// Number of MiB to process per benchmark run
+    #[arg(long = "size-mib", default_value_t = 64)]
+    size_mib: usize,
+
+    /// Number of Argon2id derivations to time
+    #[arg(long = "kdf-runs", default_value_t = 3)]
+    kdf_runs: u32,
+}
 // ---------------------------------------------------------------------------
 // Entry point
 // ---------------------------------------------------------------------------
@@ -164,8 +185,9 @@ fn main() {
             section("🔑", "KDF", "Argon2id  (64 MiB · 3 iter · 1 thread)");
             divider();
 
-            read_passphrase(args.pass_file.as_deref(), true)
-                .and_then(|p| encrypt_file(&args.plain, &args.cipher, &p, args.algorithm, args.force))
+            read_passphrase(args.pass_file.as_deref(), true).and_then(|p| {
+                encrypt_file(&args.plain, &args.cipher, &p, args.algorithm, args.force)
+            })
         }
 
         Command::Decrypt(args) => {
@@ -189,6 +211,8 @@ fn main() {
             divider();
             keygen::generate_key(&args.output, args.force)
         }
+
+        Command::Bench(args) => run_bench(args),
     };
 
     eprintln!();
@@ -200,6 +224,122 @@ fn main() {
         }
     }
     eprintln!();
+}
+
+// ---------------------------------------------------------------------------
+// Benchmarks
+// ---------------------------------------------------------------------------
+
+fn run_bench(args: BenchArgs) -> Result<(), CryError> {
+    let size_bytes = args.size_mib.max(1) * 1024 * 1024;
+    let mut plain = vec![0u8; size_bytes];
+    rand::rngs::OsRng.fill_bytes(&mut plain);
+
+    let mut salt = [0u8; 16];
+    rand::rngs::OsRng.fill_bytes(&mut salt);
+    let passphrase = b"benchmark-passphrase";
+
+    eprintln!(
+        "  🧪  \x1b[1mBenchmarking\x1b[0m  {} MiB payload",
+        args.size_mib.max(1)
+    );
+    divider();
+
+    let kdf_start = Instant::now();
+    for _ in 0..args.kdf_runs.max(1) {
+        let _ = derive_key(passphrase, &salt)?;
+    }
+    let kdf_avg_ms = kdf_start.elapsed().as_secs_f64() * 1000.0 / args.kdf_runs.max(1) as f64;
+
+    let key = derive_key(passphrase, &salt)?;
+    bench_algorithm(Algorithm::Aes256Gcm, &plain, &*key);
+    bench_algorithm(Algorithm::ChaCha20Poly1305, &plain, &*key);
+
+    eprintln!(
+        "  Argon2id avg : {:.1} ms/derive ({} run(s))",
+        kdf_avg_ms,
+        args.kdf_runs.max(1)
+    );
+    Ok(())
+}
+
+fn bench_algorithm(algo: Algorithm, plain: &[u8], key: &[u8; 32]) {
+    let mut base_nonce = [0u8; 12];
+    rand::rngs::OsRng.fill_bytes(&mut base_nonce);
+
+    let mut h = Sha256::new();
+    h.update(b"cry-bench-aad");
+    let aad = h.finalize();
+
+    let enc_start = Instant::now();
+    let ciphertext = match algo {
+        Algorithm::Aes256Gcm => {
+            let cipher = Aes256Gcm::new(AesKey::<Aes256Gcm>::from_slice(key));
+            cipher
+                .encrypt(
+                    AesNonce::from_slice(&base_nonce),
+                    Payload {
+                        msg: plain,
+                        aad: &aad,
+                    },
+                )
+                .expect("benchmark encryption should not fail")
+        }
+        Algorithm::ChaCha20Poly1305 => {
+            let cipher = ChaCha20Poly1305::new(ChaChaKey::from_slice(key));
+            cipher
+                .encrypt(
+                    ChaChaNonce::from_slice(&base_nonce),
+                    Payload {
+                        msg: plain,
+                        aad: &aad,
+                    },
+                )
+                .expect("benchmark encryption should not fail")
+        }
+    };
+    let enc_secs = enc_start.elapsed().as_secs_f64();
+
+    let dec_start = Instant::now();
+    match algo {
+        Algorithm::Aes256Gcm => {
+            let cipher = Aes256Gcm::new(AesKey::<Aes256Gcm>::from_slice(key));
+            let _ = cipher
+                .decrypt(
+                    AesNonce::from_slice(&base_nonce),
+                    Payload {
+                        msg: &ciphertext,
+                        aad: &aad,
+                    },
+                )
+                .expect("benchmark decryption should not fail");
+        }
+        Algorithm::ChaCha20Poly1305 => {
+            let cipher = ChaCha20Poly1305::new(ChaChaKey::from_slice(key));
+            let _ = cipher
+                .decrypt(
+                    ChaChaNonce::from_slice(&base_nonce),
+                    Payload {
+                        msg: &ciphertext,
+                        aad: &aad,
+                    },
+                )
+                .expect("benchmark decryption should not fail");
+        }
+    }
+    let dec_secs = dec_start.elapsed().as_secs_f64();
+
+    let mib = plain.len() as f64 / (1024.0 * 1024.0);
+    eprintln!(
+        "  {} encrypt: {:>7.1} MiB/s",
+        algo,
+        mib / enc_secs.max(1e-9)
+    );
+    eprintln!(
+        "  {} decrypt: {:>7.1} MiB/s",
+        algo,
+        mib / dec_secs.max(1e-9)
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -231,18 +371,15 @@ fn read_passphrase(
     }
 
     // 2. Interactive prompt (stderr; stdout stays clean)
-    let pass = Zeroizing::new(
-        rpassword::prompt_password("  Passphrase : ").map_err(CryError::Io)?,
-    );
+    let pass = Zeroizing::new(rpassword::prompt_password("  Passphrase : ").map_err(CryError::Io)?);
 
     if pass.is_empty() {
         return Err(CryError::EmptyPassphrase);
     }
 
     if confirm {
-        let confirm_pass = Zeroizing::new(
-            rpassword::prompt_password("  Confirm    : ").map_err(CryError::Io)?,
-        );
+        let confirm_pass =
+            Zeroizing::new(rpassword::prompt_password("  Confirm    : ").map_err(CryError::Io)?);
         if *pass != *confirm_pass {
             return Err(CryError::PassphraseMismatch);
         }
@@ -328,8 +465,7 @@ mod integration {
         std::fs::write(&cipher, b"existing").unwrap();
 
         let pass = passphrase("test");
-        let err = encrypt_file(&plain, &cipher, &pass, Algorithm::Aes256Gcm, false)
-            .unwrap_err();
+        let err = encrypt_file(&plain, &cipher, &pass, Algorithm::Aes256Gcm, false).unwrap_err();
         assert!(
             matches!(err, CryError::FileExists(_)),
             "expected FileExists, got {err:?}"
@@ -360,7 +496,14 @@ mod integration {
         let cipher = dir.path().join("out.cry");
         let recovered = dir.path().join("recovered.txt");
 
-        encrypt_file(&plain, &cipher, &passphrase("correct"), Algorithm::Aes256Gcm, false).unwrap();
+        encrypt_file(
+            &plain,
+            &cipher,
+            &passphrase("correct"),
+            Algorithm::Aes256Gcm,
+            false,
+        )
+        .unwrap();
         let err = decrypt_file(&recovered, &cipher, &passphrase("wrong"), false).unwrap_err();
         assert!(
             matches!(err, CryError::HeaderTampered | CryError::DecryptionFailed),
@@ -368,7 +511,10 @@ mod integration {
         );
 
         // Partial output must not remain.
-        assert!(!recovered.exists(), "tmp file should be cleaned up on failure");
+        assert!(
+            !recovered.exists(),
+            "tmp file should be cleaned up on failure"
+        );
     }
 
     #[test]
@@ -378,7 +524,14 @@ mod integration {
         let cipher = dir.path().join("out.cry");
         let recovered = dir.path().join("recovered.txt");
 
-        encrypt_file(&plain, &cipher, &passphrase("pw"), Algorithm::Aes256Gcm, false).unwrap();
+        encrypt_file(
+            &plain,
+            &cipher,
+            &passphrase("pw"),
+            Algorithm::Aes256Gcm,
+            false,
+        )
+        .unwrap();
         let _ = decrypt_file(&recovered, &cipher, &passphrase("bad"), false);
 
         let tmp = recovered.with_extension("plain.tmp");

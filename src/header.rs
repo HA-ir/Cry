@@ -173,7 +173,12 @@ impl Header {
             .map_err(|_| CryError::InvalidFormat("Failed to read header HMAC".into()))?;
 
         // Re-compute and verify the HMAC in constant time.
-        let header = Header { algo, salt, nonce, chunk_count };
+        let header = Header {
+            algo,
+            salt,
+            nonce,
+            chunk_count,
+        };
         let pre_hmac = header.pre_hmac_bytes();
 
         use sha2::{Digest, Sha256};
