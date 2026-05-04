@@ -11,13 +11,20 @@ mod kdf;
 mod keygen;
 
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 use clap::{CommandFactory, Parser};
 use zeroize::Zeroizing;
 
+use aes_gcm::aead::{Aead, KeyInit, Payload};
+use aes_gcm::{Aes256Gcm, Key as AesKey, Nonce as AesNonce};
+use chacha20poly1305::{ChaCha20Poly1305, Key as ChaChaKey, Nonce as ChaChaNonce};
 use cipher::{decrypt_file, encrypt_file};
 use error::CryError;
 use header::Algorithm;
+use kdf::derive_key;
+use rand::RngCore;
+use sha2::{Digest, Sha256};
 
 // ---------------------------------------------------------------------------
 // Banner / formatting helpers
@@ -76,7 +83,7 @@ enum Command {
 
     /// Run quick crypto benchmarks
     #[command(name = "bench")]
-    Bench(bench::BenchArgs),
+    Bench(BenchArgs),
 }
 
 // ── Encrypt ───────────────────────────────────────────────────────────────────
@@ -143,6 +150,16 @@ struct KeygenArgs {
     force: bool,
 }
 
+#[derive(clap::Args, Debug)]
+struct BenchArgs {
+    /// Number of MiB to process per benchmark run
+    #[arg(long = "size-mib", default_value_t = 64)]
+    size_mib: usize,
+
+    /// Number of Argon2id derivations to time
+    #[arg(long = "kdf-runs", default_value_t = 3)]
+    kdf_runs: u32,
+}
 // ---------------------------------------------------------------------------
 // Entry point
 // ---------------------------------------------------------------------------
@@ -196,7 +213,7 @@ fn main() {
             keygen::generate_key(&args.output, args.force)
         }
 
-        Command::Bench(args) => bench::run_bench(args),
+        Command::Bench(args) => run_bench(args),
     };
 
     eprintln!();
@@ -208,6 +225,122 @@ fn main() {
         }
     }
     eprintln!();
+}
+
+// ---------------------------------------------------------------------------
+// Benchmarks
+// ---------------------------------------------------------------------------
+
+fn run_bench(args: BenchArgs) -> Result<(), CryError> {
+    let size_bytes = args.size_mib.max(1) * 1024 * 1024;
+    let mut plain = vec![0u8; size_bytes];
+    rand::rngs::OsRng.fill_bytes(&mut plain);
+
+    let mut salt = [0u8; 16];
+    rand::rngs::OsRng.fill_bytes(&mut salt);
+    let passphrase = b"benchmark-passphrase";
+
+    eprintln!(
+        "  🧪  \x1b[1mBenchmarking\x1b[0m  {} MiB payload",
+        args.size_mib.max(1)
+    );
+    divider();
+
+    let kdf_start = Instant::now();
+    for _ in 0..args.kdf_runs.max(1) {
+        let _ = derive_key(passphrase, &salt)?;
+    }
+    let kdf_avg_ms = kdf_start.elapsed().as_secs_f64() * 1000.0 / args.kdf_runs.max(1) as f64;
+
+    let key = derive_key(passphrase, &salt)?;
+    bench_algorithm(Algorithm::Aes256Gcm, &plain, &*key);
+    bench_algorithm(Algorithm::ChaCha20Poly1305, &plain, &*key);
+
+    eprintln!(
+        "  Argon2id avg : {:.1} ms/derive ({} run(s))",
+        kdf_avg_ms,
+        args.kdf_runs.max(1)
+    );
+    Ok(())
+}
+
+fn bench_algorithm(algo: Algorithm, plain: &[u8], key: &[u8; 32]) {
+    let mut base_nonce = [0u8; 12];
+    rand::rngs::OsRng.fill_bytes(&mut base_nonce);
+
+    let mut h = Sha256::new();
+    h.update(b"cry-bench-aad");
+    let aad = h.finalize();
+
+    let enc_start = Instant::now();
+    let ciphertext = match algo {
+        Algorithm::Aes256Gcm => {
+            let cipher = Aes256Gcm::new(AesKey::<Aes256Gcm>::from_slice(key));
+            cipher
+                .encrypt(
+                    AesNonce::from_slice(&base_nonce),
+                    Payload {
+                        msg: plain,
+                        aad: &aad,
+                    },
+                )
+                .expect("benchmark encryption should not fail")
+        }
+        Algorithm::ChaCha20Poly1305 => {
+            let cipher = ChaCha20Poly1305::new(ChaChaKey::from_slice(key));
+            cipher
+                .encrypt(
+                    ChaChaNonce::from_slice(&base_nonce),
+                    Payload {
+                        msg: plain,
+                        aad: &aad,
+                    },
+                )
+                .expect("benchmark encryption should not fail")
+        }
+    };
+    let enc_secs = enc_start.elapsed().as_secs_f64();
+
+    let dec_start = Instant::now();
+    match algo {
+        Algorithm::Aes256Gcm => {
+            let cipher = Aes256Gcm::new(AesKey::<Aes256Gcm>::from_slice(key));
+            let _ = cipher
+                .decrypt(
+                    AesNonce::from_slice(&base_nonce),
+                    Payload {
+                        msg: &ciphertext,
+                        aad: &aad,
+                    },
+                )
+                .expect("benchmark decryption should not fail");
+        }
+        Algorithm::ChaCha20Poly1305 => {
+            let cipher = ChaCha20Poly1305::new(ChaChaKey::from_slice(key));
+            let _ = cipher
+                .decrypt(
+                    ChaChaNonce::from_slice(&base_nonce),
+                    Payload {
+                        msg: &ciphertext,
+                        aad: &aad,
+                    },
+                )
+                .expect("benchmark decryption should not fail");
+        }
+    }
+    let dec_secs = dec_start.elapsed().as_secs_f64();
+
+    let mib = plain.len() as f64 / (1024.0 * 1024.0);
+    eprintln!(
+        "  {} encrypt: {:>7.1} MiB/s",
+        algo,
+        mib / enc_secs.max(1e-9)
+    );
+    eprintln!(
+        "  {} decrypt: {:>7.1} MiB/s",
+        algo,
+        mib / dec_secs.max(1e-9)
+    );
 }
 
 // ---------------------------------------------------------------------------

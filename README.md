@@ -135,12 +135,11 @@ regardless of the base nonce bit pattern.
 
 ```sh
 cry bench
-cry bench --size-mib 256 --samples 9 --warmup 2 --kdf-runs 7
+cry bench --size-mib 256 --kdf-runs 5
 ```
 
-Prints local throughput estimates (MiB/s) for AES-256-GCM and
-ChaCha20-Poly1305 using warmup + repeated samples, then reports median and p95
-for encrypt/decrypt plus average Argon2id derivation time.
+Prints quick local throughput estimates (MiB/s) for AES-256-GCM and
+ChaCha20-Poly1305 encrypt/decrypt, plus average Argon2id derivation time.
 
 ## Running tests
 
