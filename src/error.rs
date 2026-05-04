@@ -10,6 +10,9 @@ pub enum CryError {
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
 
+    #[error("Encryption failed (AEAD error)")]
+    EncryptionFailed,
+
     #[error("Decryption failed — wrong passphrase, corrupted file, or tampered ciphertext")]
     DecryptionFailed,
 
@@ -25,7 +28,7 @@ pub enum CryError {
     #[error("Key derivation failed: {0}")]
     Kdf(String),
 
-    #[error("Output file already exists: '{0}'. Use --force to overwrite")]
+    #[error("Output file '{0}' already exists — use --force to overwrite")]
     FileExists(String),
 
     #[error("Passphrase must not be empty")]
@@ -33,9 +36,6 @@ pub enum CryError {
 
     #[error("Passphrases do not match")]
     PassphraseMismatch,
-
-    #[error("Environment variable '{0}' is not set")]
-    MissingEnvVar(String),
 
     #[error("Chunk {index} length {len} is suspiciously large — file may be corrupted")]
     SuspiciousChunkLen { index: u64, len: usize },

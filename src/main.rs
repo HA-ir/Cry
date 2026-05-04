@@ -9,56 +9,35 @@ mod header;
 mod kdf;
 mod keygen;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use clap::{CommandFactory, Parser};
 use zeroize::Zeroizing;
 
-use cipher::{decrypt_file, encrypt_file, Algorithm};
+use cipher::{decrypt_file, encrypt_file};
 use error::CryError;
+use header::Algorithm;
 
-// ── ANSI colour helpers ───────────────────────────────────────────────────────
-
-macro_rules! style {
-    (bold    $s:expr) => { concat!("\x1b[1m",    $s, "\x1b[0m") };
-    (dim     $s:expr) => { concat!("\x1b[2m",    $s, "\x1b[0m") };
-    (cyan    $s:expr) => { concat!("\x1b[36m",   $s, "\x1b[0m") };
-    (green   $s:expr) => { concat!("\x1b[32m",   $s, "\x1b[0m") };
-    (yellow  $s:expr) => { concat!("\x1b[33m",   $s, "\x1b[0m") };
-    (red     $s:expr) => { concat!("\x1b[31m",   $s, "\x1b[0m") };
-    (magenta $s:expr) => { concat!("\x1b[35m",   $s, "\x1b[0m") };
-}
+// ---------------------------------------------------------------------------
+// Banner / formatting helpers
+// ---------------------------------------------------------------------------
 
 fn banner() {
-    /*
-    eprintln!(
-        "\n{}  {}",
-        style!(bold "╔═╗ ╦═╗ ╦ ╦"),
-        style!(dim "v") ,
-    );
-    */
-    // Simpler banner that's definitely valid
     let ver = env!("CARGO_PKG_VERSION");
-    eprintln!(
-        "  {}  {}",
-        style!(bold "cry 🔐"),
-        format!("\x1b[2mv{ver}\x1b[0m")
-    );
-    eprintln!();
+    eprintln!("\n  cry 🔐  \x1b[2mv{ver}\x1b[0m\n");
 }
 
 fn section(icon: &str, label: &str, value: &str) {
-    eprintln!(
-        "  {}  \x1b[2m{:<12}\x1b[0m  {}",
-        icon, label, value
-    );
+    eprintln!("  {}  \x1b[2m{:<12}\x1b[0m  {}", icon, label, value);
 }
 
 fn divider() {
     eprintln!("  \x1b[2m{}\x1b[0m", "─".repeat(48));
 }
 
-// ── CLI definition ────────────────────────────────────────────────────────────
+// ---------------------------------------------------------------------------
+// CLI definition
+// ---------------------------------------------------------------------------
 
 /// cry — encrypt and decrypt files with AES-256-GCM or ChaCha20-Poly1305
 #[derive(Parser, Debug)]
@@ -66,13 +45,13 @@ fn divider() {
     name = "cry",
     version = env!("CARGO_PKG_VERSION"),
     about = "Encrypt and decrypt files — passphrase-protected, authenticated",
-    long_about = None,
     after_help = concat!(
         "\x1b[2mExamples:\x1b[0m\n",
         "  cry encrypt -p secret.txt -c secret.cry\n",
-        "  cry decrypt -c secret.cry -p recovered.txt\n",
         "  cry encrypt -p secret.txt -c secret.cry -a chacha20poly1305\n",
-        "  cry keygen -o my.key\n",
+        "  cry decrypt -c secret.cry -p recovered.txt\n",
+        "  cry decrypt -c secret.cry -p recovered.txt --force\n",
+        "  cry keygen  -o my.key\n",
     )
 )]
 struct Cli {
@@ -99,7 +78,7 @@ enum Command {
 
 #[derive(clap::Args, Debug)]
 struct EncryptArgs {
-    /// Plaintext input file  (use - for stdin)
+    /// Plaintext input file
     #[arg(short = 'p', long = "plain", value_name = "FILE")]
     plain: PathBuf,
 
@@ -116,11 +95,11 @@ struct EncryptArgs {
     )]
     algorithm: Algorithm,
 
-    /// Read passphrase from this environment variable (useful in scripts)
-    #[arg(long = "pass-env", value_name = "VAR", help_heading = "Advanced")]
-    pass_env: Option<String>,
+    /// Overwrite the output file if it already exists
+    #[arg(long = "force", default_value_t = false)]
+    force: bool,
 
-    /// Read passphrase from a file (first line used)
+    /// Read passphrase from a file (first line used; useful in containers/CI)
     #[arg(long = "pass-file", value_name = "FILE", help_heading = "Advanced")]
     pass_file: Option<PathBuf>,
 }
@@ -137,11 +116,11 @@ struct DecryptArgs {
     #[arg(short = 'p', long = "plain", value_name = "FILE")]
     plain: PathBuf,
 
-    /// Read passphrase from this environment variable
-    #[arg(long = "pass-env", value_name = "VAR", help_heading = "Advanced")]
-    pass_env: Option<String>,
+    /// Overwrite the output file if it already exists
+    #[arg(long = "force", default_value_t = false)]
+    force: bool,
 
-    /// Read passphrase from a file (first line used)
+    /// Read passphrase from a file (first line used; useful in containers/CI)
     #[arg(long = "pass-file", value_name = "FILE", help_heading = "Advanced")]
     pass_file: Option<PathBuf>,
 }
@@ -159,7 +138,9 @@ struct KeygenArgs {
     force: bool,
 }
 
-// ── Entry point ───────────────────────────────────────────────────────────────
+// ---------------------------------------------------------------------------
+// Entry point
+// ---------------------------------------------------------------------------
 
 fn main() {
     let cli = Cli::parse();
@@ -183,8 +164,8 @@ fn main() {
             section("🔑", "KDF", "Argon2id  (64 MiB · 3 iter · 1 thread)");
             divider();
 
-            read_passphrase(args.pass_env.as_deref(), args.pass_file.as_deref(), true)
-                .and_then(|p| encrypt_file(&args.plain, &args.cipher, &p, args.algorithm))
+            read_passphrase(args.pass_file.as_deref(), true)
+                .and_then(|p| encrypt_file(&args.plain, &args.cipher, &p, args.algorithm, args.force))
         }
 
         Command::Decrypt(args) => {
@@ -196,8 +177,8 @@ fn main() {
             section("🔑", "KDF", "Argon2id  (64 MiB · 3 iter · 1 thread)");
             divider();
 
-            read_passphrase(args.pass_env.as_deref(), args.pass_file.as_deref(), false)
-                .and_then(|p| decrypt_file(&args.plain, &args.cipher, &p))
+            read_passphrase(args.pass_file.as_deref(), false)
+                .and_then(|p| decrypt_file(&args.plain, &args.cipher, &p, args.force))
         }
 
         Command::Keygen(args) => {
@@ -221,26 +202,25 @@ fn main() {
     eprintln!();
 }
 
-// ── Passphrase helpers ────────────────────────────────────────────────────────
+// ---------------------------------------------------------------------------
+// Passphrase helpers
+// ---------------------------------------------------------------------------
 
 /// Read a passphrase from (in priority order):
-///   1. an environment variable (`--pass-env VAR`)
-///   2. a file (`--pass-file PATH`, first line)
-///   3. an interactive terminal prompt (with optional confirmation)
+///   1. a file (`--pass-file PATH`, first line)
+///   2. an interactive terminal prompt (with optional confirmation)
 ///
+/// Status output goes to stderr; stdout stays clean for piping.
 /// Returns `Zeroizing<Vec<u8>>` so the bytes are wiped on drop.
+///
+/// Environment variables are not supported as a passphrase source: they are
+/// visible via `/proc/<pid>/environ`, `ps`, and child-process inheritance.
+/// Use `--pass-file` with a mode-0600 file, or prompt interactively.
 fn read_passphrase(
-    env_var: Option<&str>,
-    pass_file: Option<&std::path::Path>,
+    pass_file: Option<&Path>,
     confirm: bool,
 ) -> Result<Zeroizing<Vec<u8>>, CryError> {
-    // 1. Environment variable
-    if let Some(var) = env_var {
-        let val = std::env::var(var).map_err(|_| CryError::MissingEnvVar(var.to_string()))?;
-        return Ok(Zeroizing::new(val.into_bytes()));
-    }
-
-    // 2. Passphrase file
+    // 1. Passphrase file
     if let Some(path) = pass_file {
         let contents = std::fs::read_to_string(path)?;
         let first_line = contents.lines().next().unwrap_or("").to_string();
@@ -250,10 +230,9 @@ fn read_passphrase(
         return Ok(Zeroizing::new(first_line.into_bytes()));
     }
 
-    // 3. Interactive prompt
+    // 2. Interactive prompt (stderr; stdout stays clean)
     let pass = Zeroizing::new(
-        rpassword::prompt_password("  Passphrase : ")
-            .map_err(|e| CryError::Io(e))?,
+        rpassword::prompt_password("  Passphrase : ").map_err(CryError::Io)?,
     );
 
     if pass.is_empty() {
@@ -262,8 +241,7 @@ fn read_passphrase(
 
     if confirm {
         let confirm_pass = Zeroizing::new(
-            rpassword::prompt_password("  Confirm    : ")
-                .map_err(|e| CryError::Io(e))?,
+            rpassword::prompt_password("  Confirm    : ").map_err(CryError::Io)?,
         );
         if *pass != *confirm_pass {
             return Err(CryError::PassphraseMismatch);
@@ -271,4 +249,139 @@ fn read_passphrase(
     }
 
     Ok(Zeroizing::new(pass.as_bytes().to_vec()))
+}
+
+// ---------------------------------------------------------------------------
+// Integration tests (file-based, cover atomic rename / --force paths)
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod integration {
+    use super::*;
+    use tempfile::TempDir;
+
+    fn passphrase(s: &str) -> Zeroizing<Vec<u8>> {
+        Zeroizing::new(s.as_bytes().to_vec())
+    }
+
+    fn write_file(dir: &TempDir, name: &str, contents: &[u8]) -> PathBuf {
+        let path = dir.path().join(name);
+        std::fs::write(&path, contents).unwrap();
+        path
+    }
+
+    #[test]
+    fn encrypt_decrypt_roundtrip_aes() {
+        let dir = TempDir::new().unwrap();
+        let plain = write_file(&dir, "plain.txt", b"Hello from integration test!");
+        let cipher = dir.path().join("out.cry");
+        let recovered = dir.path().join("recovered.txt");
+
+        let pass = passphrase("hunter2");
+        encrypt_file(&plain, &cipher, &pass, Algorithm::Aes256Gcm, false).unwrap();
+        decrypt_file(&recovered, &cipher, &pass, false).unwrap();
+
+        assert_eq!(
+            std::fs::read(&plain).unwrap(),
+            std::fs::read(&recovered).unwrap()
+        );
+    }
+
+    #[test]
+    fn encrypt_decrypt_roundtrip_chacha() {
+        let dir = TempDir::new().unwrap();
+        let plain = write_file(&dir, "plain.txt", b"ChaCha integration test data.");
+        let cipher = dir.path().join("out.cry");
+        let recovered = dir.path().join("recovered.txt");
+
+        let pass = passphrase("passphrase123");
+        encrypt_file(&plain, &cipher, &pass, Algorithm::ChaCha20Poly1305, false).unwrap();
+        decrypt_file(&recovered, &cipher, &pass, false).unwrap();
+
+        assert_eq!(
+            std::fs::read(&plain).unwrap(),
+            std::fs::read(&recovered).unwrap()
+        );
+    }
+
+    #[test]
+    fn encrypt_decrypt_empty_file() {
+        let dir = TempDir::new().unwrap();
+        let plain = write_file(&dir, "empty.txt", b"");
+        let cipher = dir.path().join("out.cry");
+        let recovered = dir.path().join("recovered.txt");
+
+        let pass = passphrase("emptytest");
+        encrypt_file(&plain, &cipher, &pass, Algorithm::Aes256Gcm, false).unwrap();
+        decrypt_file(&recovered, &cipher, &pass, false).unwrap();
+
+        assert_eq!(std::fs::read(&recovered).unwrap(), b"");
+    }
+
+    #[test]
+    fn refuses_to_overwrite_without_force() {
+        let dir = TempDir::new().unwrap();
+        let plain = write_file(&dir, "plain.txt", b"data");
+        let cipher = dir.path().join("out.cry");
+
+        // Create a pre-existing output file.
+        std::fs::write(&cipher, b"existing").unwrap();
+
+        let pass = passphrase("test");
+        let err = encrypt_file(&plain, &cipher, &pass, Algorithm::Aes256Gcm, false)
+            .unwrap_err();
+        assert!(
+            matches!(err, CryError::FileExists(_)),
+            "expected FileExists, got {err:?}"
+        );
+
+        // File should still contain the original content.
+        assert_eq!(std::fs::read(&cipher).unwrap(), b"existing");
+    }
+
+    #[test]
+    fn force_flag_allows_overwrite() {
+        let dir = TempDir::new().unwrap();
+        let plain = write_file(&dir, "plain.txt", b"new data");
+        let cipher = dir.path().join("out.cry");
+        std::fs::write(&cipher, b"old").unwrap();
+
+        let pass = passphrase("test");
+        encrypt_file(&plain, &cipher, &pass, Algorithm::Aes256Gcm, true).unwrap();
+
+        // Output should be the new cry file, not "old".
+        assert_ne!(std::fs::read(&cipher).unwrap(), b"old");
+    }
+
+    #[test]
+    fn wrong_passphrase_rejected() {
+        let dir = TempDir::new().unwrap();
+        let plain = write_file(&dir, "plain.txt", b"secret");
+        let cipher = dir.path().join("out.cry");
+        let recovered = dir.path().join("recovered.txt");
+
+        encrypt_file(&plain, &cipher, &passphrase("correct"), Algorithm::Aes256Gcm, false).unwrap();
+        let err = decrypt_file(&recovered, &cipher, &passphrase("wrong"), false).unwrap_err();
+        assert!(
+            matches!(err, CryError::HeaderTampered | CryError::DecryptionFailed),
+            "expected auth failure, got {err:?}"
+        );
+
+        // Partial output must not remain.
+        assert!(!recovered.exists(), "tmp file should be cleaned up on failure");
+    }
+
+    #[test]
+    fn no_tmp_file_left_on_failure() {
+        let dir = TempDir::new().unwrap();
+        let plain = write_file(&dir, "plain.txt", b"test");
+        let cipher = dir.path().join("out.cry");
+        let recovered = dir.path().join("recovered.txt");
+
+        encrypt_file(&plain, &cipher, &passphrase("pw"), Algorithm::Aes256Gcm, false).unwrap();
+        let _ = decrypt_file(&recovered, &cipher, &passphrase("bad"), false);
+
+        let tmp = recovered.with_extension("plain.tmp");
+        assert!(!tmp.exists(), ".plain.tmp should be cleaned up on failure");
+    }
 }

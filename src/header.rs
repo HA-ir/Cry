@@ -5,7 +5,7 @@
 //! ```text
 //! ┌──────────────────────────────────────────────────────────────────────┐
 //! │ Magic        4 bytes   "CRY\x02"  (version bump from v0.1)           │
-//! │ Algorithm    1 byte    AlgoId enum                                   │
+//! │ Algorithm    1 byte    algorithm identifier byte                     │
 //! │ Salt        16 bytes   Argon2 salt (random per file)                 │
 //! │ Nonce       12 bytes   AEAD base nonce (random per file)             │
 //! │ ChunkCount   8 bytes   u64 big-endian — expected number of chunks    │
@@ -39,24 +39,32 @@ pub const HEADER_LEN: usize = 4 + 1 + SALT_LEN + NONCE_LEN + 8 + HMAC_LEN;
 const HMAC_DOMAIN: &[u8] = b"cry-header-hmac-v2";
 
 // ---------------------------------------------------------------------------
-// Algorithm identifier
+// Algorithm identifier — single enum used for both CLI and wire format.
+//
+// Derives both `clap::ValueEnum` (for --algorithm flag) and is `repr(u8)`
+// so it can be written directly to the file header. A single enum here
+// replaces the previous two-enum design and its From conversion.
 // ---------------------------------------------------------------------------
 
-/// One-byte algorithm identifier stored in the header.
-/// Unifies what was previously a split between `Algorithm` (clap) and `AlgoId`
-/// (header byte) — this single enum serves both roles.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Encryption algorithm — controls both the CLI `--algorithm` flag and
+/// the one-byte identifier stored in the file header.
+#[derive(clap::ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
-pub enum AlgoId {
+pub enum Algorithm {
+    /// AES-256-GCM — hardware-accelerated on most x86/ARM64 CPUs (default)
+    #[value(name = "aes256gcm", alias = "aes")]
     Aes256Gcm = 0x01,
+
+    /// ChaCha20-Poly1305 — preferred on devices without AES hardware
+    #[value(name = "chacha20poly1305", alias = "chacha")]
     ChaCha20Poly1305 = 0x02,
 }
 
-impl AlgoId {
+impl Algorithm {
     pub fn from_byte(b: u8) -> Result<Self, CryError> {
         match b {
-            0x01 => Ok(AlgoId::Aes256Gcm),
-            0x02 => Ok(AlgoId::ChaCha20Poly1305),
+            0x01 => Ok(Algorithm::Aes256Gcm),
+            0x02 => Ok(Algorithm::ChaCha20Poly1305),
             _ => Err(CryError::InvalidFormat(format!(
                 "Unknown algorithm identifier 0x{b:02x} — was this file created with a newer \
                  version of cry?"
@@ -65,11 +73,11 @@ impl AlgoId {
     }
 }
 
-impl std::fmt::Display for AlgoId {
+impl std::fmt::Display for Algorithm {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            AlgoId::Aes256Gcm => write!(f, "AES-256-GCM"),
-            AlgoId::ChaCha20Poly1305 => write!(f, "ChaCha20-Poly1305"),
+            Algorithm::Aes256Gcm => write!(f, "AES-256-GCM"),
+            Algorithm::ChaCha20Poly1305 => write!(f, "ChaCha20-Poly1305"),
         }
     }
 }
@@ -79,11 +87,12 @@ impl std::fmt::Display for AlgoId {
 // ---------------------------------------------------------------------------
 
 pub struct Header {
-    pub algo: AlgoId,
+    pub algo: Algorithm,
     pub salt: [u8; SALT_LEN],
     pub nonce: [u8; NONCE_LEN],
     /// Number of ciphertext chunks in the file body.
     /// Written during encryption; verified during decryption.
+    /// Zero is valid (empty input file).
     pub chunk_count: u64,
 }
 
@@ -102,7 +111,6 @@ impl Header {
     /// Compute HMAC-SHA256 over the pre-HMAC header bytes using a
     /// domain-separated sub-key derived from `key`.
     fn compute_hmac(pre_hmac: &[u8], key: &[u8; 32]) -> [u8; HMAC_LEN] {
-        // Sub-key: SHA-256(domain || key)
         use sha2::{Digest, Sha256};
         let mut h = Sha256::new();
         h.update(HMAC_DOMAIN);
@@ -145,7 +153,7 @@ impl Header {
         let mut algo_byte = [0u8; 1];
         r.read_exact(&mut algo_byte)
             .map_err(|_| CryError::InvalidFormat("Failed to read algorithm byte".into()))?;
-        let algo = AlgoId::from_byte(algo_byte[0])?;
+        let algo = Algorithm::from_byte(algo_byte[0])?;
 
         let mut salt = [0u8; SALT_LEN];
         r.read_exact(&mut salt)
@@ -164,13 +172,12 @@ impl Header {
         r.read_exact(&mut stored_hmac)
             .map_err(|_| CryError::InvalidFormat("Failed to read header HMAC".into()))?;
 
-        // Re-compute and verify the HMAC in constant time using HMAC::verify_slice.
+        // Re-compute and verify the HMAC in constant time.
         let header = Header { algo, salt, nonce, chunk_count };
         let pre_hmac = header.pre_hmac_bytes();
 
-        // Build the same sub-key used in compute_hmac.
-        use sha2::{Digest, Sha256 as Sha256Inner};
-        let mut h = Sha256Inner::new();
+        use sha2::{Digest, Sha256};
+        let mut h = Sha256::new();
         h.update(HMAC_DOMAIN);
         h.update(key);
         let sub_key: [u8; 32] = h.finalize().into();

@@ -1,8 +1,5 @@
 //! Key derivation from a passphrase using Argon2id.
 //!
-//! Argon2id is the winner of the Password Hashing Competition and is
-//! recommended by OWASP for password-based key derivation.
-//!
 //! Parameters (OWASP recommended minimums for interactive use):
 //!   - Memory      : 64 MiB
 //!   - Iterations  : 3
@@ -24,7 +21,6 @@ pub const KEY_LEN: usize = 32;
 /// Returns a `Zeroizing` wrapper so the key bytes are wiped from memory
 /// when the value is dropped.
 pub fn derive_key(passphrase: &[u8], salt: &[u8]) -> Result<Zeroizing<[u8; KEY_LEN]>, CryError> {
-    // 64 MiB memory, 3 iterations, 1 thread
     let params = Params::new(65536, 3, 1, Some(KEY_LEN))
         .map_err(|e| CryError::Kdf(e.to_string()))?;
 
