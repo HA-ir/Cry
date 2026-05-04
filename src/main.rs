@@ -11,20 +11,13 @@ mod kdf;
 mod keygen;
 
 use std::path::{Path, PathBuf};
-use std::time::Instant;
 
 use clap::{CommandFactory, Parser};
 use zeroize::Zeroizing;
 
-use aes_gcm::aead::{Aead, KeyInit, Payload};
-use aes_gcm::{Aes256Gcm, Key as AesKey, Nonce as AesNonce};
-use chacha20poly1305::{ChaCha20Poly1305, Key as ChaChaKey, Nonce as ChaChaNonce};
 use cipher::{decrypt_file, encrypt_file};
 use error::CryError;
 use header::Algorithm;
-use kdf::derive_key;
-use rand::RngCore;
-use sha2::{Digest, Sha256};
 
 // ---------------------------------------------------------------------------
 // Banner / formatting helpers
@@ -83,7 +76,7 @@ enum Command {
 
     /// Run quick crypto benchmarks
     #[command(name = "bench")]
-    Bench(BenchArgs),
+    Bench(bench::BenchArgs),
 }
 
 // ── Encrypt ───────────────────────────────────────────────────────────────────
@@ -150,16 +143,6 @@ struct KeygenArgs {
     force: bool,
 }
 
-#[derive(clap::Args, Debug)]
-struct BenchArgs {
-    /// Number of MiB to process per benchmark run
-    #[arg(long = "size-mib", default_value_t = 64)]
-    size_mib: usize,
-
-    /// Number of Argon2id derivations to time
-    #[arg(long = "kdf-runs", default_value_t = 3)]
-    kdf_runs: u32,
-}
 // ---------------------------------------------------------------------------
 // Entry point
 // ---------------------------------------------------------------------------
