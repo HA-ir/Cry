@@ -131,6 +131,16 @@ regardless of the base nonce bit pattern.
 
 ---
 
+### Benchmark performance
+
+```sh
+cry bench
+cry bench --size-mib 256 --kdf-runs 5
+```
+
+Prints quick local throughput estimates (MiB/s) for AES-256-GCM and
+ChaCha20-Poly1305 encrypt/decrypt, plus average Argon2id derivation time.
+
 ## Running tests
 
 ```sh
@@ -150,6 +160,53 @@ wrong-passphrase rejection, `--force`, overwrite guard, tmp-file cleanup.
 4. The CLI picks it up automatically via `clap`'s `ValueEnum` derive.
 
 ---
+
+## Threat model
+
+### Assets we protect
+
+- **Plaintext confidentiality** of file contents at rest and in transit as `.cry` blobs.
+- **Integrity and authenticity** of encrypted files (header + chunk stream).
+- **Passphrase-derived key secrecy** during runtime and after process exit.
+
+### Trust assumptions
+
+- The host OS, Rust toolchain, and CPU are not actively compromised.
+- Cryptographic primitives (AES-256-GCM, ChaCha20-Poly1305, HMAC-SHA256, Argon2id, SHA-256) behave as designed.
+- Users choose sufficiently strong passphrases or use high-entropy secrets via `--pass-file`.
+
+### In scope (attacker capabilities this tool is designed to resist)
+
+- Reading encrypted `.cry` files without the passphrase.
+- Offline brute-force attempts against captured ciphertext (cost amplified by Argon2id parameters).
+- File tampering: modifying header bytes, chunk lengths, chunk ciphertext/tag, reordering/removing chunks, or truncation.
+- Nonce-misuse from chunking logic (mitigated by per-chunk 96-bit counter nonce derivation).
+- Accidental destructive overwrite of output files (mitigated by explicit `--force`).
+
+### Out of scope / not guaranteed
+
+- Compromised endpoint security (malware, keyloggers, root/admin attackers, memory scraping while process runs).
+- Passphrase theft from unsafe user practices (weak passphrases, shared secret files, shell history leaks).
+- Metadata privacy: file names, paths, sizes, timestamps, and access patterns are not hidden.
+- Plausible deniability or hidden-volume semantics.
+- Secure deletion of source plaintext or filesystem/journal remnants.
+- Side-channel resistance beyond what underlying libraries/platform provide.
+- Multi-user policy controls, remote KMS/HSM integration, or enterprise key lifecycle governance.
+
+### Security properties provided
+
+- **Confidentiality:** AEAD encryption for every chunk.
+- **Integrity/authenticity:** header HMAC + per-chunk AEAD authentication.
+- **Wrong-key detection:** decryption fails on authentication mismatch.
+- **Format robustness:** explicit structural checks for chunk framing and truncation.
+
+### Misuse-resistance guidance
+
+- Prefer long, unique passphrases (or random secrets in `0600` passphrase files).
+- Keep encrypted backups; loss of passphrase means permanent data loss.
+- Verify fingerprints when handling generated key files.
+- Treat decrypted outputs as sensitive and manage their lifecycle separately.
+
 
 ## Security notes
 
