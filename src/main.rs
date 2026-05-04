@@ -3,6 +3,7 @@
 //! Supported algorithms: AES-256-GCM, ChaCha20-Poly1305
 //! Key derivation: Argon2id (64 MiB, 3 iterations)
 
+mod bench;
 mod cipher;
 mod error;
 mod header;
