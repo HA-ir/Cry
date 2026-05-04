@@ -88,7 +88,12 @@ pub fn encrypt_file(
     let key = derive_key(passphrase.as_slice(), &salt)?;
     eprintln!("done.");
 
-    let header = Header { algo: algorithm, salt, nonce: nonce_bytes, chunk_count };
+    let header = Header {
+        algo: algorithm,
+        salt,
+        nonce: nonce_bytes,
+        chunk_count,
+    };
     let header_aad = header_aad(&header);
 
     let tmp_path = cipher_path.with_extension("cry.tmp");
@@ -102,8 +107,15 @@ pub fn encrypt_file(
 
         header.write(&mut writer, &key)?;
 
-        let actual_chunks =
-            encrypt_chunks(&mut reader, &mut writer, &key, &nonce_bytes, algorithm, &header_aad, chunk_count)?;
+        let actual_chunks = encrypt_chunks(
+            &mut reader,
+            &mut writer,
+            &key,
+            &nonce_bytes,
+            algorithm,
+            &header_aad,
+            chunk_count,
+        )?;
 
         writer.flush()?;
 
@@ -131,7 +143,10 @@ pub fn encrypt_file(
 
     let cipher_len = std::fs::metadata(cipher_path)?.len();
     eprintln!("  Input     : {} bytes", plain_len);
-    eprintln!("  Output    : {} bytes ({} chunk(s))", cipher_len, chunk_count);
+    eprintln!(
+        "  Output    : {} bytes ({} chunk(s))",
+        cipher_len, chunk_count
+    );
 
     Ok(())
 }
@@ -219,7 +234,10 @@ pub fn decrypt_file(
             std::fs::rename(&tmp_path, plain_path)?;
             let plain_len = std::fs::metadata(plain_path)?.len();
             eprintln!("  Input     : {} bytes", cipher_len);
-            eprintln!("  Output    : {} bytes ({} chunk(s))", plain_len, actual_chunks);
+            eprintln!(
+                "  Output    : {} bytes ({} chunk(s))",
+                plain_len, actual_chunks
+            );
         }
         Err(e) => {
             let _ = std::fs::remove_file(&tmp_path);
@@ -453,14 +471,22 @@ mod tests {
     use crate::header::Algorithm;
     use std::io::Cursor;
 
-    fn make_key_and_header(algo: Algorithm, input: &[u8]) -> (Zeroizing<[u8; 32]>, Header, [u8; 32]) {
+    fn make_key_and_header(
+        algo: Algorithm,
+        input: &[u8],
+    ) -> (Zeroizing<[u8; 32]>, Header, [u8; 32]) {
         let mut salt = [0u8; SALT_LEN];
         let mut nonce_bytes = [0u8; NONCE_LEN];
         rand::rngs::OsRng.fill_bytes(&mut salt);
         rand::rngs::OsRng.fill_bytes(&mut nonce_bytes);
 
         let chunk_count = (input.len() as u64).div_ceil(CHUNK_SIZE as u64);
-        let header = Header { algo, salt, nonce: nonce_bytes, chunk_count };
+        let header = Header {
+            algo,
+            salt,
+            nonce: nonce_bytes,
+            chunk_count,
+        };
         let key = derive_key(b"correct horse battery staple", &salt).unwrap();
         let aad = header_aad(&header);
         (key, header, aad)
@@ -574,7 +600,10 @@ mod tests {
             &aad,
             chunk_count,
         );
-        assert!(result.is_err(), "tampered ciphertext should fail decryption");
+        assert!(
+            result.is_err(),
+            "tampered ciphertext should fail decryption"
+        );
     }
 
     #[test]
@@ -599,6 +628,9 @@ mod tests {
         header.write(&mut buf, &key).unwrap();
 
         let result = Header::read(&mut buf.as_slice(), &wrong_key);
-        assert!(result.is_err(), "header HMAC should reject wrong passphrase");
+        assert!(
+            result.is_err(),
+            "header HMAC should reject wrong passphrase"
+        );
     }
 }

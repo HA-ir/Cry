@@ -35,7 +35,11 @@ pub fn generate_key(output_path: &Path, force: bool) -> Result<(), CryError> {
     }
 
     let fingerprint = key_fingerprint(key.as_ref());
-    eprintln!("  Size        : {} bytes ({}-bit key)", KEY_SIZE, KEY_SIZE * 8);
+    eprintln!(
+        "  Size        : {} bytes ({}-bit key)",
+        KEY_SIZE,
+        KEY_SIZE * 8
+    );
     eprintln!("  Source      : OsRng (OS cryptographic RNG)");
     eprintln!("  Fingerprint : {fingerprint}");
     eprintln!(

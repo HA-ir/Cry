@@ -3,6 +3,7 @@
 //! Supported algorithms: AES-256-GCM, ChaCha20-Poly1305
 //! Key derivation: Argon2id (64 MiB, 3 iterations)
 
+mod bench;
 mod cipher;
 mod error;
 mod header;
@@ -72,6 +73,10 @@ enum Command {
     /// Generate a cryptographically secure random key file
     #[command(name = "keygen", alias = "-kg", alias = "kg")]
     Keygen(KeygenArgs),
+
+    /// Run quick crypto benchmarks
+    #[command(name = "bench")]
+    Bench(bench::BenchArgs),
 }
 
 // ── Encrypt ───────────────────────────────────────────────────────────────────
@@ -164,8 +169,9 @@ fn main() {
             section("🔑", "KDF", "Argon2id  (64 MiB · 3 iter · 1 thread)");
             divider();
 
-            read_passphrase(args.pass_file.as_deref(), true)
-                .and_then(|p| encrypt_file(&args.plain, &args.cipher, &p, args.algorithm, args.force))
+            read_passphrase(args.pass_file.as_deref(), true).and_then(|p| {
+                encrypt_file(&args.plain, &args.cipher, &p, args.algorithm, args.force)
+            })
         }
 
         Command::Decrypt(args) => {
@@ -189,6 +195,8 @@ fn main() {
             divider();
             keygen::generate_key(&args.output, args.force)
         }
+
+        Command::Bench(args) => bench::run_bench(args),
     };
 
     eprintln!();
@@ -231,18 +239,15 @@ fn read_passphrase(
     }
 
     // 2. Interactive prompt (stderr; stdout stays clean)
-    let pass = Zeroizing::new(
-        rpassword::prompt_password("  Passphrase : ").map_err(CryError::Io)?,
-    );
+    let pass = Zeroizing::new(rpassword::prompt_password("  Passphrase : ").map_err(CryError::Io)?);
 
     if pass.is_empty() {
         return Err(CryError::EmptyPassphrase);
     }
 
     if confirm {
-        let confirm_pass = Zeroizing::new(
-            rpassword::prompt_password("  Confirm    : ").map_err(CryError::Io)?,
-        );
+        let confirm_pass =
+            Zeroizing::new(rpassword::prompt_password("  Confirm    : ").map_err(CryError::Io)?);
         if *pass != *confirm_pass {
             return Err(CryError::PassphraseMismatch);
         }
@@ -328,8 +333,7 @@ mod integration {
         std::fs::write(&cipher, b"existing").unwrap();
 
         let pass = passphrase("test");
-        let err = encrypt_file(&plain, &cipher, &pass, Algorithm::Aes256Gcm, false)
-            .unwrap_err();
+        let err = encrypt_file(&plain, &cipher, &pass, Algorithm::Aes256Gcm, false).unwrap_err();
         assert!(
             matches!(err, CryError::FileExists(_)),
             "expected FileExists, got {err:?}"
@@ -360,7 +364,14 @@ mod integration {
         let cipher = dir.path().join("out.cry");
         let recovered = dir.path().join("recovered.txt");
 
-        encrypt_file(&plain, &cipher, &passphrase("correct"), Algorithm::Aes256Gcm, false).unwrap();
+        encrypt_file(
+            &plain,
+            &cipher,
+            &passphrase("correct"),
+            Algorithm::Aes256Gcm,
+            false,
+        )
+        .unwrap();
         let err = decrypt_file(&recovered, &cipher, &passphrase("wrong"), false).unwrap_err();
         assert!(
             matches!(err, CryError::HeaderTampered | CryError::DecryptionFailed),
@@ -368,7 +379,10 @@ mod integration {
         );
 
         // Partial output must not remain.
-        assert!(!recovered.exists(), "tmp file should be cleaned up on failure");
+        assert!(
+            !recovered.exists(),
+            "tmp file should be cleaned up on failure"
+        );
     }
 
     #[test]
@@ -378,7 +392,14 @@ mod integration {
         let cipher = dir.path().join("out.cry");
         let recovered = dir.path().join("recovered.txt");
 
-        encrypt_file(&plain, &cipher, &passphrase("pw"), Algorithm::Aes256Gcm, false).unwrap();
+        encrypt_file(
+            &plain,
+            &cipher,
+            &passphrase("pw"),
+            Algorithm::Aes256Gcm,
+            false,
+        )
+        .unwrap();
         let _ = decrypt_file(&recovered, &cipher, &passphrase("bad"), false);
 
         let tmp = recovered.with_extension("plain.tmp");
