@@ -28,6 +28,7 @@ This review summarizes strengths, risks, and a prioritized improvement plan for 
 
 ### P0 (Do next)
 
+- Decide about `keygen.rs`
 - Align released version references across `README.md`, `Cargo.toml`, and changelog/release tags.
 - Decide on supported Rust toolchain policy and make it explicit (`rust-version` in `Cargo.toml`, docs update, dependency policy update).
 - Add CI workflow with at least:
