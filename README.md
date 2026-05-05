@@ -126,19 +126,17 @@ produce different keys by design.
 
 ```sh
 cry identity -n work --ssh
-# same output:
+# outputs encrypted OpenSSH private key + public key line:
 cry identity -n work --openssh
 ```
 
 2. Copy the printed `ssh-ed25519 ...` line into the server's
 `~/.ssh/authorized_keys`.
 
-3. For daily SSH login, use a normal local OpenSSH private key file (created by
-`ssh-keygen`) **or** convert CryDNA raw private key output to OpenSSH format
-using external tooling.
+3. If you use `--openssh`, Cry prompts for a separate passphrase and prints an
+encrypted `OPENSSH PRIVATE KEY` block plus matching `ssh-ed25519 ...` public line.
 
-> Note: `--show-private-key` prints raw 32-byte Ed25519 secret hex, not an
-> OpenSSH private key file.
+> Note: `--show-private-key` still prints raw 32-byte Ed25519 secret hex.
 
 For a complete operational guide, see [`docs/identity-and-ssh.md`](docs/identity-and-ssh.md).
 
