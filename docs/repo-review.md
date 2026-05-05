@@ -12,19 +12,16 @@ This review summarizes strengths, risks, and a prioritized improvement plan for 
 
 ## Key issues observed
 
-1. **Version/documentation drift**  
-   `README.md` reports `v0.5.0`, while `Cargo.toml` still declares package version `0.4.5`. This can confuse users and packagers.
-
-2. **Rust edition/dependency compatibility mismatch**  
+1. **Rust edition/dependency compatibility mismatch**  
    The project is set to edition `2024`, but dependency comments mention compatibility pinning for older Rust toolchains. If Rust <1.85 support matters, edition 2024 may conflict with that goal.
 
-3. **No CI quality gates in-repo**  
+2. **No CI quality gates in-repo**  
    I did not find a repository-local CI workflow for lint/tests/security checks. This raises regression risk for crypto-sensitive code.
 
-4. **Limited parser robustness hardening evidence**  
+3. **Limited parser robustness hardening evidence**  
    Architecture docs mention fuzzing/property tests as roadmap items, but they are not yet part of a standard verification path.
 
-5. **Benchmark output not automation-friendly**  
+4. **Benchmark output not automation-friendly**  
    `bench` is useful interactively, but lacks a machine-readable mode (e.g., JSON) for release-to-release performance tracking.
 
 ## Prioritized improvement plan
