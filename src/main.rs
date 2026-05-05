@@ -84,7 +84,7 @@ enum Command {
     ///
     /// The same passphrase + namespace + version always produces the same
     /// Ed25519 keypair, on any machine, without storing anything to disk.
-    #[command(name = "identity", alias = "id")]
+    #[command(name = "identity",  alias = "-id", alias = "id")]
     Identity(IdentityArgs),
 
     /// Sign a file using a derived CryDNA identity

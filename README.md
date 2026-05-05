@@ -12,7 +12,7 @@ Passphrase-protected, authenticated, streaming — handles files of any size.
 | 1 | **Unified `Algorithm` enum** — `AlgoId` and `Algorithm` merged into one `repr(u8)` + `clap::ValueEnum` type; no more silent `From` conversion between two parallel enums |
 | 2 | **Counter nonce** — per-chunk nonce uses the standard 96-bit big-endian add-with-carry construction (same as TLS 1.3), replacing the fragile XOR scheme |
 | 3 | **`EncryptionFailed` error** — `encrypt_chunk` no longer incorrectly returns `DecryptionFailed` on AEAD encrypt errors |
-| 4 | **`--force` on encrypt/decrypt** — both commands now refuse to silently overwrite an existing output file unless `--force` is passed; `keygen` already had this |
+| 4 | **`--force` on encrypt/decrypt** — both commands now refuse to silently overwrite an existing output file unless `--force` is passed keygen |
 | 5 | **Correct empty-file handling** — `chunk_count` is now `0` for empty files (was `max(1, 0) = 1`), eliminating a spurious truncation warning on decrypt |
 | 6 | **`--pass-env` removed** — environment variables are visible in `/proc`, `ps`, and child processes; removed to avoid giving users a false sense of security |
 | 7 | **Progress reporting** — multi-chunk files print `chunk N/M` to stderr during encrypt/decrypt |
@@ -64,26 +64,45 @@ cry decrypt -c secret.cry -p out.txt    --pass-file /run/secrets/passphrase
 
 The first line of the file is used. Set permissions to `0600`.
 
-### Key file generation (archival / verification)
+### Identity (CryDNA)
 
 ```sh
-cry keygen -o my.key
-cry keygen -o my.key --force    # overwrite existing
+cry identity
+cry identity -n work --ssh
+cry identity -n work --key-version 2
+cry identity -n work --sub-id deploy
 ```
 
-Prints a SHA-256 fingerprint so you can verify key identity without exposing
-raw bytes.
+`cry identity` intentionally **does not print or export your private key**. It only
+shows public information (public key + fingerprint), while the private key stays
+in memory for the current process and is wiped on drop.
 
-> **Note:** `keygen` produces a raw key file for archival purposes.
-> Encrypt/decrypt use passphrase-derived keys (Argon2id) and do not consume
-> these files directly. A future `--key-file` flag will wire them together.
+If you need to use the identity, run operations that consume it directly:
+
+```sh
+cry sign -f release.tar.gz -n work
+cry verify -f release.tar.gz -s <SIGNATURE_HEX> -k <PUBLIC_KEY_HEX>
+```
+
+#### Identity recovery
+
+There is no "private key recovery" output because keys are deterministic. To
+recreate the same identity on any machine, provide the exact same tuple:
+
+- passphrase
+- namespace (`-n/--namespace`)
+- key version (`--key-version`)
+- sub-identity (`--sub-id`, if used)
+
+If any one of these differs (including typos/case changes), you'll derive a
+different keypair. If the original passphrase is lost, recovery is not possible.
 
 ### All command aliases
 
 ```sh
 cry encrypt / en / -en
 cry decrypt / de / -de
-cry keygen  / kg / -kg
+cry identity / id / -id
 ```
 
 ---
