@@ -71,11 +71,21 @@ cry identity
 cry identity -n work --ssh
 cry identity -n work --key-version 2
 cry identity -n work --sub-id deploy
+cry identity -n work --show-private-key
 ```
 
-`cry identity` intentionally **does not print or export your private key**. It only
-shows public information (public key + fingerprint), while the private key stays
-in memory for the current process and is wiped on drop.
+By default, `cry identity` does **not** print your private key. It shows public
+information (public key + fingerprint), while the private key stays in memory
+for the current process and is wiped on drop.
+
+If you explicitly need to export it, pass:
+
+```sh
+cry identity --show-private-key
+```
+
+This prints the raw 32-byte Ed25519 secret key as lowercase hex. Treat that
+value like a password: anyone with it can sign as you.
 
 If you need to use the identity, run operations that consume it directly:
 
