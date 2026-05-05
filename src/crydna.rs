@@ -158,6 +158,15 @@ impl Identity {
     }
 
     /// Export as an encrypted OpenSSH private key (PEM block).
+    ///
+    /// The `passphrase` provided here is the SSH key encryption passphrase
+    /// (for the emitted `OPENSSH PRIVATE KEY` block), and is intentionally
+    /// separate from the CryDNA master passphrase used to deterministically
+    /// derive this identity.
+    ///
+    /// Returns a UTF-8 PEM string suitable for writing directly to disk.
+    /// The internal encoder returns a zeroizing string wrapper; we convert
+    /// to a plain `String` at this boundary to match the public API.
     pub fn openssh_private_key(
         &self,
         passphrase: &str,
@@ -167,12 +176,15 @@ impl Identity {
             .map_err(|e| CryError::InvalidFormat(format!("OpenSSH key build failed: {e}")))?;
         let private = PrivateKey::new(KeypairData::Ed25519(keypair), comment)
             .map_err(|e| CryError::InvalidFormat(format!("OpenSSH key build failed: {e}")))?;
+        let mut rng = rand::thread_rng();
         private
-            .encrypt(rand::thread_rng(), passphrase)
+            .encrypt(&mut rng, passphrase)
             .map_err(|e| CryError::InvalidFormat(format!("OpenSSH key encryption failed: {e}")))?
             .to_openssh(LineEnding::LF)
+            .map(|pem| pem.to_string())
             .map_err(|e| CryError::InvalidFormat(format!("OpenSSH key encode failed: {e}")))
     }
+
 
     // ── Signing ─────────────────────────────────────────────────────────────
 

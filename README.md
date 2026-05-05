@@ -1,11 +1,11 @@
-# cry 🔐  v0.4.0
+# cry 🔐  v0.5.0
 
 A fast, minimal CLI cryptography tool written in Rust.  
 Passphrase-protected, authenticated, streaming — handles files of any size.
 
 ---
 
-## What's new in v0.4
+## What's new in v0.5
 
 | # | Change |
 |---|--------|
@@ -17,6 +17,8 @@ Passphrase-protected, authenticated, streaming — handles files of any size.
 | 6 | **`--pass-env` removed** — environment variables are visible in `/proc`, `ps`, and child processes; removed to avoid giving users a false sense of security |
 | 7 | **Progress reporting** — multi-chunk files print `chunk N/M` to stderr during encrypt/decrypt |
 | 8 | **Integration tests** — file-based tests cover round-trip (AES + ChaCha), empty files, `--force`, overwrite guard, wrong-passphrase cleanup, and tmp-file removal on failure |
+| 9 | **OpenSSH export polish** — CryDNA OpenSSH private key export now documents passphrase behavior and returns the PEM as a plain `String` for simpler downstream handling |
+
 
 ---
 
