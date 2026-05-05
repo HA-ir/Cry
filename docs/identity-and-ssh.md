@@ -52,6 +52,8 @@ key as lowercase hex.
 
 ```bash
 cry identity -n work --ssh
+# equivalent:
+cry identity -n work --openssh
 ```
 
 2. Copy printed line:

@@ -69,6 +69,7 @@ The first line of the file is used. Set permissions to `0600`.
 ```sh
 cry identity
 cry identity -n work --ssh
+cry identity -n work --openssh
 cry identity -n work --key-version 2
 cry identity -n work --sub-id deploy
 cry identity -n work --show-private-key
@@ -125,6 +126,8 @@ produce different keys by design.
 
 ```sh
 cry identity -n work --ssh
+# same output:
+cry identity -n work --openssh
 ```
 
 2. Copy the printed `ssh-ed25519 ...` line into the server's

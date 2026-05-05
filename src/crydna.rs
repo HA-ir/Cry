@@ -113,9 +113,7 @@ impl Identity {
         // Build the signing key from the seed; seed is zeroized after this point.
         let signing_key = SigningKey::from_bytes(&*seed);
 
-        Ok(Identity {
-            signing_key,
-        })
+        Ok(Identity { signing_key })
     }
 
     // ── Public key views ────────────────────────────────────────────────────
@@ -201,18 +199,18 @@ pub fn verify_content_signature(
     // Parse public key
     let pub_bytes = hex_to_bytes(public_key_hex)
         .map_err(|e| CryError::InvalidFormat(format!("Invalid public key hex: {e}")))?;
-    let pub_array: [u8; 32] = pub_bytes
-        .try_into()
-        .map_err(|_| CryError::InvalidFormat("Ed25519 public key must be exactly 32 bytes".into()))?;
+    let pub_array: [u8; 32] = pub_bytes.try_into().map_err(|_| {
+        CryError::InvalidFormat("Ed25519 public key must be exactly 32 bytes".into())
+    })?;
     let verifying_key = VerifyingKey::from_bytes(&pub_array)
         .map_err(|e| CryError::InvalidFormat(format!("Invalid Ed25519 public key: {e}")))?;
 
     // Parse signature
     let sig_bytes = hex_to_bytes(signature_hex)
         .map_err(|e| CryError::InvalidFormat(format!("Invalid signature hex: {e}")))?;
-    let sig_array: [u8; 64] = sig_bytes
-        .try_into()
-        .map_err(|_| CryError::InvalidFormat("Ed25519 signature must be exactly 64 bytes".into()))?;
+    let sig_array: [u8; 64] = sig_bytes.try_into().map_err(|_| {
+        CryError::InvalidFormat("Ed25519 signature must be exactly 64 bytes".into())
+    })?;
     let signature = Signature::from_bytes(&sig_array);
 
     // Reconstruct the signed message hash
@@ -326,6 +324,10 @@ pub struct IdentityArgs {
     /// Also print an SSH authorized_keys line
     #[arg(long = "ssh")]
     pub ssh: bool,
+
+    /// Also print an OpenSSH public key line (same output as --ssh)
+    #[arg(long = "openssh")]
+    pub openssh: bool,
 
     /// Comment embedded in the SSH key line (used with --ssh)
     #[arg(long = "comment", default_value = "CryDNA", value_name = "TEXT")]
@@ -485,8 +487,14 @@ mod tests {
     fn ssh_line_format() {
         let id = Identity::derive(b"pass", "default", 0, None).unwrap();
         let line = id.ssh_authorized_keys_line("test@host");
-        assert!(line.starts_with("ssh-ed25519 "), "SSH line must start with ssh-ed25519");
-        assert!(line.ends_with("test@host"), "SSH line must end with comment");
+        assert!(
+            line.starts_with("ssh-ed25519 "),
+            "SSH line must start with ssh-ed25519"
+        );
+        assert!(
+            line.ends_with("test@host"),
+            "SSH line must end with comment"
+        );
     }
 
     #[test]
