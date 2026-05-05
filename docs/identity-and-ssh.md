@@ -33,6 +33,7 @@ These produce different keys by design.
 - public key (hex/base64)
 - fingerprint
 - optional SSH public line (`--ssh`)
+- encrypted OpenSSH private key + public line (`--openssh`)
 
 By default it does not print private key material.
 
@@ -52,7 +53,7 @@ key as lowercase hex.
 
 ```bash
 cry identity -n work --ssh
-# equivalent:
+# or generate full OpenSSH keypair output:
 cry identity -n work --openssh
 ```
 
@@ -73,14 +74,17 @@ chmod 600 ~/.ssh/authorized_keys
 
 ### Client
 
-Use a standard OpenSSH private key file for authentication:
+If you use `--openssh`, Cry prints an encrypted OpenSSH private key block and
+matching public key line. Save the private block to a file (for example
+`~/.ssh/id_ed25519_crydna`) and set permissions to `600`.
+
+You can also use a standard OpenSSH private key file for authentication:
 
 ```bash
 ssh -i ~/.ssh/id_ed25519 user@server
 ```
 
-If you want to use CryDNA private-key hex directly with OpenSSH, you must first
-convert it to a valid OpenSSH private key file using trusted external tooling.
+`--show-private-key` output is raw hex, not an OpenSSH private key file.
 
 ---
 

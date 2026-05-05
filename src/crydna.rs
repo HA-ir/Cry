@@ -44,6 +44,7 @@ use argon2::{Algorithm as Argon2Algo, Argon2, Params, Version};
 use base64ct::{Base64, Encoding as _};
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use sha2::{Digest, Sha256};
+use ssh_key::{LineEnding, private::PrivateKey};
 use zeroize::Zeroizing;
 
 use crate::error::CryError;
@@ -151,6 +152,21 @@ impl Identity {
     pub fn ssh_authorized_keys_line(&self, comment: &str) -> String {
         let wire = ssh_wire_public_key(self.verifying_key().as_bytes());
         format!("ssh-ed25519 {} {}", Base64::encode_string(&wire), comment)
+    }
+
+    /// Export as an encrypted OpenSSH private key (PEM block).
+    pub fn openssh_private_key(
+        &self,
+        passphrase: &str,
+        comment: &str,
+    ) -> Result<String, CryError> {
+        let private = PrivateKey::from_ed25519(&self.signing_key.to_keypair_bytes(), comment)
+            .map_err(|e| CryError::InvalidFormat(format!("OpenSSH key build failed: {e}")))?;
+        private
+            .encrypt(rand::thread_rng(), passphrase)
+            .map_err(|e| CryError::InvalidFormat(format!("OpenSSH key encryption failed: {e}")))?
+            .to_openssh(LineEnding::LF)
+            .map_err(|e| CryError::InvalidFormat(format!("OpenSSH key encode failed: {e}")))
     }
 
     // ── Signing ─────────────────────────────────────────────────────────────
@@ -325,7 +341,7 @@ pub struct IdentityArgs {
     #[arg(long = "ssh")]
     pub ssh: bool,
 
-    /// Also print an OpenSSH public key line (same output as --ssh)
+    /// Print encrypted OpenSSH private key + OpenSSH public key line
     #[arg(long = "openssh")]
     pub openssh: bool,
 
