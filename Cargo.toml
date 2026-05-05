@@ -1,17 +1,17 @@
 [package]
 name = "cry"
-version = "0.4.0"
+version = "0.4.5"
 edition = "2024"
-description = "A fast, minimal CLI cryptography tool supporting AES-256-GCM and ChaCha20-Poly1305"
+description = "A fast, minimal CLI cryptography tool — AES-256-GCM, ChaCha20-Poly1305, and CryDNA deterministic identity"
 authors = ["you"]
  
 [[bin]]
 name = "cry"
 path = "src/main.rs"
-
+ 
 [dependencies]
-# CLI argument parsing
-clap = { version = "4", features = ["derive"] }
+# CLI argument parsing — pinned to <4.5 to avoid edition2024 dependency on Rust <1.85
+clap = { version = "=4.4.18", features = ["derive"] }
  
 # AES-256-GCM
 aes-gcm = "0.10"
@@ -34,12 +34,19 @@ sha2 = "0.10"
 # HMAC for header authentication
 hmac = "0.12"
  
+# Ed25519 keypair generation (CryDNA deterministic identity)
+ed25519-dalek = { version = "=2.1.1", features = ["digest"] }
+ 
+# Base64 encoding for public key export — pinned to <1.7 for Rust 1.75 compat
+base64ct = { version = "=1.6.0", features = ["alloc"] }
+ 
 # Error handling
 anyhow = "1"
 thiserror = "1"
  
-# Password prompt (no echo)
-rpassword = "7"
+# Password prompt (no echo) — pinned to avoid edition2024 transitive deps
+rpassword = "=7.3.1"
  
 [dev-dependencies]
-tempfile = "3"
+tempfile = "=3.10.1"
+ 

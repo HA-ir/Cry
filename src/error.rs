@@ -39,4 +39,7 @@ pub enum CryError {
 
     #[error("Chunk {index} length {len} is suspiciously large — file may be corrupted")]
     SuspiciousChunkLen { index: u64, len: usize },
+
+    #[error("Verification failed: {0}")]
+    VerificationFailed(String),
 }

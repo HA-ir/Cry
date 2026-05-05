@@ -2,13 +2,14 @@
 //!
 //! Supported algorithms: AES-256-GCM, ChaCha20-Poly1305
 //! Key derivation: Argon2id (64 MiB, 3 iterations)
+//! Identity: CryDNA — deterministic Ed25519 keypairs from a passphrase
 
 mod bench;
 mod cipher;
+mod crydna;
 mod error;
 mod header;
 mod kdf;
-mod keygen;
 
 use std::path::{Path, PathBuf};
 
@@ -16,6 +17,7 @@ use clap::{CommandFactory, Parser};
 use zeroize::Zeroizing;
 
 use cipher::{decrypt_file, encrypt_file};
+use crydna::{Identity, IdentityArgs, SignArgs, VerifyArgs, PubKeyFormat};
 use error::CryError;
 use header::Algorithm;
 
@@ -29,30 +31,38 @@ fn banner() {
 }
 
 fn section(icon: &str, label: &str, value: &str) {
-    eprintln!("  {}  \x1b[2m{:<12}\x1b[0m  {}", icon, label, value);
+    eprintln!("  {}  \x1b[2m{:<14}\x1b[0m  {}", icon, label, value);
 }
 
 fn divider() {
-    eprintln!("  \x1b[2m{}\x1b[0m", "─".repeat(48));
+    eprintln!("  \x1b[2m{}\x1b[0m", "─".repeat(56));
+}
+
+fn kv(label: &str, value: &str) {
+    eprintln!("  \x1b[2m{:<18}\x1b[0m  {}", label, value);
 }
 
 // ---------------------------------------------------------------------------
 // CLI definition
 // ---------------------------------------------------------------------------
 
-/// cry — encrypt and decrypt files with AES-256-GCM or ChaCha20-Poly1305
+/// cry — encrypt files, decrypt files, or build a deterministic cryptographic identity
 #[derive(Parser, Debug)]
 #[command(
     name = "cry",
     version = env!("CARGO_PKG_VERSION"),
-    about = "Encrypt and decrypt files — passphrase-protected, authenticated",
+    about = "Encrypt · Decrypt · Identity — passphrase-protected, authenticated",
     after_help = concat!(
         "\x1b[2mExamples:\x1b[0m\n",
-        "  cry encrypt -p secret.txt -c secret.cry\n",
-        "  cry encrypt -p secret.txt -c secret.cry -a chacha20poly1305\n",
-        "  cry decrypt -c secret.cry -p recovered.txt\n",
-        "  cry decrypt -c secret.cry -p recovered.txt --force\n",
-        "  cry keygen  -o my.key\n",
+        "  cry encrypt  -p secret.txt -c secret.cry\n",
+        "  cry encrypt  -p secret.txt -c secret.cry -a chacha20poly1305\n",
+        "  cry decrypt  -c secret.cry -p recovered.txt\n",
+        "  cry identity                                # show default identity\n",
+        "  cry identity -n work --ssh                  # work key, SSH format\n",
+        "  cry identity -n work --key-version 2        # rotated key\n",
+        "  cry identity -n work --sub-id deploy        # sub-identity\n",
+        "  cry sign     -f report.pdf -n work          # sign a file\n",
+        "  cry verify   -f report.pdf -s <SIG> -k <PUB>  # verify a signature\n",
     )
 )]
 struct Cli {
@@ -70,9 +80,20 @@ enum Command {
     #[command(name = "decrypt", alias = "-de", alias = "de")]
     Decrypt(DecryptArgs),
 
-    /// Generate a cryptographically secure random key file
-    #[command(name = "keygen", alias = "-kg", alias = "kg")]
-    Keygen(KeygenArgs),
+    /// Derive and display a deterministic cryptographic identity (CryDNA)
+    ///
+    /// The same passphrase + namespace + version always produces the same
+    /// Ed25519 keypair, on any machine, without storing anything to disk.
+    #[command(name = "identity", alias = "id")]
+    Identity(IdentityArgs),
+
+    /// Sign a file using a derived CryDNA identity
+    #[command(name = "sign")]
+    Sign(SignArgs),
+
+    /// Verify a file signature against a public key
+    #[command(name = "verify")]
+    Verify(VerifyArgs),
 
     /// Run quick crypto benchmarks
     #[command(name = "bench")]
@@ -130,19 +151,6 @@ struct DecryptArgs {
     pass_file: Option<PathBuf>,
 }
 
-// ── Keygen ────────────────────────────────────────────────────────────────────
-
-#[derive(clap::Args, Debug)]
-struct KeygenArgs {
-    /// Where to write the generated key
-    #[arg(short = 'o', long = "output", value_name = "FILE")]
-    output: PathBuf,
-
-    /// Overwrite the output file if it already exists
-    #[arg(long = "force", default_value_t = false)]
-    force: bool,
-}
-
 // ---------------------------------------------------------------------------
 // Entry point
 // ---------------------------------------------------------------------------
@@ -159,6 +167,7 @@ fn main() {
     banner();
 
     let result: Result<(), CryError> = match command {
+        // ── Encrypt ──────────────────────────────────────────────────────────
         Command::Encrypt(args) => {
             eprintln!(
                 "  🔒  \x1b[1mEncrypting\x1b[0m  {} \x1b[2m→\x1b[0m {}",
@@ -174,6 +183,7 @@ fn main() {
             })
         }
 
+        // ── Decrypt ──────────────────────────────────────────────────────────
         Command::Decrypt(args) => {
             eprintln!(
                 "  🔓  \x1b[1mDecrypting\x1b[0m  {} \x1b[2m→\x1b[0m {}",
@@ -187,13 +197,147 @@ fn main() {
                 .and_then(|p| decrypt_file(&args.plain, &args.cipher, &p, args.force))
         }
 
-        Command::Keygen(args) => {
+        // ── Identity (CryDNA) ─────────────────────────────────────────────
+        Command::Identity(args) => {
+            let p = &args.params;
+
+            // Build display header
+            let mut label = format!("namespace={:?}", p.namespace);
+            if p.key_version > 0 {
+                label.push_str(&format!("  version={}", p.key_version));
+            }
+            if let Some(ref sub) = p.sub_id {
+                label.push_str(&format!("  sub={sub:?}"));
+            }
+            eprintln!("  🪪  \x1b[1mCryDNA Identity\x1b[0m  \x1b[2m{label}\x1b[0m");
+            section("⚙", "Algorithm", "Ed25519");
+            section("🔑", "KDF", "Argon2id  (64 MiB · 3 iter · 1 thread)");
+            divider();
+
+            read_passphrase(p.pass_file.as_deref(), false).and_then(|pass| {
+                let id = Identity::derive(
+                    &pass,
+                    &p.namespace,
+                    p.key_version,
+                    p.sub_id.as_deref(),
+                )?;
+                divider();
+
+                // Public key output
+                match args.format {
+                    PubKeyFormat::Hex => {
+                        kv("Public key (hex)", &id.public_key_hex());
+                    }
+                    PubKeyFormat::Base64 => {
+                        kv("Public key (b64)", &id.public_key_base64());
+                    }
+                    PubKeyFormat::All => {
+                        kv("Public key (hex)", &id.public_key_hex());
+                        kv("Public key (b64)", &id.public_key_base64());
+                    }
+                }
+
+                kv("Fingerprint", &id.fingerprint());
+                kv("Private key", "\x1b[2m[in memory only — never stored]\x1b[0m");
+
+                if args.ssh {
+                    divider();
+                    eprintln!("  \x1b[2mSSH authorized_keys line:\x1b[0m");
+                    eprintln!();
+                    eprintln!("  {}", id.ssh_authorized_keys_line(&args.comment));
+                    eprintln!();
+                    eprintln!(
+                        "  \x1b[2mAppend the line above to ~/.ssh/authorized_keys on your server.\x1b[0m"
+                    );
+                }
+
+                Ok(())
+            })
+        }
+
+        // ── Sign ─────────────────────────────────────────────────────────────
+        Command::Sign(args) => {
+            let p = &args.params;
             eprintln!(
-                "  🎲  \x1b[1mGenerating key\x1b[0m  \x1b[2m→\x1b[0m {}",
-                args.output.display()
+                "  ✍️   \x1b[1mSigning\x1b[0m  {}",
+                args.file.display()
+            );
+            section("🪪", "Namespace", &format!("{:?}  v{}", p.namespace, p.key_version));
+            section("⚙", "Algorithm", "Ed25519");
+            divider();
+
+            let content = std::fs::read(&args.file).map_err(CryError::Io);
+
+            content.and_then(|bytes| {
+                read_passphrase(p.pass_file.as_deref(), false).and_then(|pass| {
+                    let id = Identity::derive(
+                        &pass,
+                        &p.namespace,
+                        p.key_version,
+                        p.sub_id.as_deref(),
+                    )?;
+                    let sig = id.sign_content(&bytes);
+                    let sig_hex = Identity::signature_hex(&sig);
+
+                    divider();
+                    kv("Public key", &id.public_key_hex());
+                    kv("File", &args.file.display().to_string());
+                    kv("Signature", &sig_hex);
+                    eprintln!();
+                    eprintln!("  \x1b[2mVerify with:\x1b[0m");
+                    eprintln!(
+                        "  cry verify -f {} -s {} -k {}",
+                        args.file.display(),
+                        sig_hex,
+                        id.public_key_hex()
+                    );
+
+                    Ok(())
+                })
+            })
+        }
+
+        // ── Verify ───────────────────────────────────────────────────────────
+        Command::Verify(args) => {
+            eprintln!(
+                "  🔍  \x1b[1mVerifying\x1b[0m  {}",
+                args.file.display()
             );
             divider();
-            keygen::generate_key(&args.output, args.force)
+
+            let result: Result<(), CryError> = (|| {
+                let content = std::fs::read(&args.file).map_err(CryError::Io)?;
+                let valid = crydna::verify_content_signature(
+                    &args.public_key,
+                    &content,
+                    &args.signature,
+                )?;
+
+                kv("File", &args.file.display().to_string());
+                kv("Public key", &args.public_key);
+                kv(
+                    "Signature",
+                    &format!(
+                        "{}…{}",
+                        &args.signature[..8],
+                        &args.signature[args.signature.len().saturating_sub(8)..]
+                    ),
+                );
+                divider();
+
+                if valid {
+                    eprintln!("  \x1b[32m✔\x1b[0m  Signature is \x1b[1mVALID\x1b[0m — file is authentic and untampered.");
+                    Ok(())
+                } else {
+                    Err(CryError::VerificationFailed(
+                        "Signature does not match — file may have been tampered with, \
+                         or the wrong public key was supplied."
+                            .into(),
+                    ))
+                }
+            })();
+
+            result
         }
 
         Command::Bench(args) => bench::run_bench(args),
@@ -220,15 +364,10 @@ fn main() {
 ///
 /// Status output goes to stderr; stdout stays clean for piping.
 /// Returns `Zeroizing<Vec<u8>>` so the bytes are wiped on drop.
-///
-/// Environment variables are not supported as a passphrase source: they are
-/// visible via `/proc/<pid>/environ`, `ps`, and child-process inheritance.
-/// Use `--pass-file` with a mode-0600 file, or prompt interactively.
 fn read_passphrase(
     pass_file: Option<&Path>,
     confirm: bool,
 ) -> Result<Zeroizing<Vec<u8>>, CryError> {
-    // 1. Passphrase file
     if let Some(path) = pass_file {
         let contents = std::fs::read_to_string(path)?;
         let first_line = contents.lines().next().unwrap_or("").to_string();
@@ -238,16 +377,18 @@ fn read_passphrase(
         return Ok(Zeroizing::new(first_line.into_bytes()));
     }
 
-    // 2. Interactive prompt (stderr; stdout stays clean)
-    let pass = Zeroizing::new(rpassword::prompt_password("  Passphrase : ").map_err(CryError::Io)?);
+    let pass = Zeroizing::new(
+        rpassword::prompt_password("  Passphrase : ").map_err(CryError::Io)?,
+    );
 
     if pass.is_empty() {
         return Err(CryError::EmptyPassphrase);
     }
 
     if confirm {
-        let confirm_pass =
-            Zeroizing::new(rpassword::prompt_password("  Confirm    : ").map_err(CryError::Io)?);
+        let confirm_pass = Zeroizing::new(
+            rpassword::prompt_password("  Confirm    : ").map_err(CryError::Io)?,
+        );
         if *pass != *confirm_pass {
             return Err(CryError::PassphraseMismatch);
         }
@@ -328,18 +469,15 @@ mod integration {
         let dir = TempDir::new().unwrap();
         let plain = write_file(&dir, "plain.txt", b"data");
         let cipher = dir.path().join("out.cry");
-
-        // Create a pre-existing output file.
         std::fs::write(&cipher, b"existing").unwrap();
 
         let pass = passphrase("test");
-        let err = encrypt_file(&plain, &cipher, &pass, Algorithm::Aes256Gcm, false).unwrap_err();
+        let err =
+            encrypt_file(&plain, &cipher, &pass, Algorithm::Aes256Gcm, false).unwrap_err();
         assert!(
             matches!(err, CryError::FileExists(_)),
             "expected FileExists, got {err:?}"
         );
-
-        // File should still contain the original content.
         assert_eq!(std::fs::read(&cipher).unwrap(), b"existing");
     }
 
@@ -352,8 +490,6 @@ mod integration {
 
         let pass = passphrase("test");
         encrypt_file(&plain, &cipher, &pass, Algorithm::Aes256Gcm, true).unwrap();
-
-        // Output should be the new cry file, not "old".
         assert_ne!(std::fs::read(&cipher).unwrap(), b"old");
     }
 
@@ -372,17 +508,13 @@ mod integration {
             false,
         )
         .unwrap();
-        let err = decrypt_file(&recovered, &cipher, &passphrase("wrong"), false).unwrap_err();
+        let err =
+            decrypt_file(&recovered, &cipher, &passphrase("wrong"), false).unwrap_err();
         assert!(
             matches!(err, CryError::HeaderTampered | CryError::DecryptionFailed),
             "expected auth failure, got {err:?}"
         );
-
-        // Partial output must not remain.
-        assert!(
-            !recovered.exists(),
-            "tmp file should be cleaned up on failure"
-        );
+        assert!(!recovered.exists(), "tmp file should be cleaned up on failure");
     }
 
     #[test]
@@ -404,5 +536,36 @@ mod integration {
 
         let tmp = recovered.with_extension("plain.tmp");
         assert!(!tmp.exists(), ".plain.tmp should be cleaned up on failure");
+    }
+
+    // ── CryDNA integration ─────────────────────────────────────────────────
+
+    #[test]
+    fn identity_sign_verify_full_roundtrip() {
+        use crate::crydna;
+
+        let pass = b"integration-test-passphrase";
+        let id = Identity::derive(pass, "test-ns", 0, None).unwrap();
+        let content = b"document content for signing";
+        let sig = id.sign_content(content);
+        let pub_hex = id.public_key_hex();
+        let sig_hex = Identity::signature_hex(&sig);
+
+        assert!(
+            crydna::verify_content_signature(&pub_hex, content, &sig_hex).unwrap(),
+            "full sign-verify roundtrip must succeed"
+        );
+    }
+
+    #[test]
+    fn identity_is_reproducible_across_derives() {
+        let pass = b"same-passphrase";
+        let id1 = Identity::derive(pass, "ns", 3, Some("child")).unwrap();
+        let id2 = Identity::derive(pass, "ns", 3, Some("child")).unwrap();
+        assert_eq!(
+            id1.public_key_hex(),
+            id2.public_key_hex(),
+            "identical parameters must produce identical public key"
+        );
     }
 }
