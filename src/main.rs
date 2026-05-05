@@ -17,7 +17,7 @@ use clap::{CommandFactory, Parser};
 use zeroize::Zeroizing;
 
 use cipher::{decrypt_file, encrypt_file};
-use crydna::{Identity, IdentityArgs, SignArgs, VerifyArgs, PubKeyFormat};
+use crydna::{Identity, IdentityArgs, PubKeyFormat, SignArgs, VerifyArgs};
 use error::CryError;
 use header::Algorithm;
 
@@ -59,6 +59,7 @@ fn kv(label: &str, value: &str) {
         "  cry decrypt  -c secret.cry -p recovered.txt\n",
         "  cry identity                                # show default identity\n",
         "  cry identity -n work --ssh                  # work key, SSH format\n",
+        "  cry identity -n work --openssh              # work key, OpenSSH format\n",
         "  cry identity -n work --key-version 2        # rotated key\n",
         "  cry identity -n work --sub-id deploy        # sub-identity\n",
         "  cry sign     -f report.pdf -n work          # sign a file\n",
@@ -84,7 +85,7 @@ enum Command {
     ///
     /// The same passphrase + namespace + version always produces the same
     /// Ed25519 keypair, on any machine, without storing anything to disk.
-    #[command(name = "identity",  alias = "-id", alias = "id")]
+    #[command(name = "identity", alias = "-id", alias = "id")]
     Identity(IdentityArgs),
 
     /// Sign a file using a derived CryDNA identity
@@ -238,9 +239,13 @@ fn main() {
                 }
 
                 kv("Fingerprint", &id.fingerprint());
-                kv("Private key", "\x1b[2m[in memory only — never stored]\x1b[0m");
+                if args.show_private_key {
+                    kv("Private key (hex)", &id.private_key_hex());
+                } else {
+                    kv("Private key", "\x1b[2m[in memory only — use --show-private-key to print]\x1b[0m");
+                }
 
-                if args.ssh {
+                if args.ssh || args.openssh {
                     divider();
                     eprintln!("  \x1b[2mSSH authorized_keys line:\x1b[0m");
                     eprintln!();
@@ -258,11 +263,12 @@ fn main() {
         // ── Sign ─────────────────────────────────────────────────────────────
         Command::Sign(args) => {
             let p = &args.params;
-            eprintln!(
-                "  ✍️   \x1b[1mSigning\x1b[0m  {}",
-                args.file.display()
+            eprintln!("  ✍️   \x1b[1mSigning\x1b[0m  {}", args.file.display());
+            section(
+                "🪪",
+                "Namespace",
+                &format!("{:?}  v{}", p.namespace, p.key_version),
             );
-            section("🪪", "Namespace", &format!("{:?}  v{}", p.namespace, p.key_version));
             section("⚙", "Algorithm", "Ed25519");
             divider();
 
@@ -270,12 +276,8 @@ fn main() {
 
             content.and_then(|bytes| {
                 read_passphrase(p.pass_file.as_deref(), false).and_then(|pass| {
-                    let id = Identity::derive(
-                        &pass,
-                        &p.namespace,
-                        p.key_version,
-                        p.sub_id.as_deref(),
-                    )?;
+                    let id =
+                        Identity::derive(&pass, &p.namespace, p.key_version, p.sub_id.as_deref())?;
                     let sig = id.sign_content(&bytes);
                     let sig_hex = Identity::signature_hex(&sig);
 
@@ -299,19 +301,13 @@ fn main() {
 
         // ── Verify ───────────────────────────────────────────────────────────
         Command::Verify(args) => {
-            eprintln!(
-                "  🔍  \x1b[1mVerifying\x1b[0m  {}",
-                args.file.display()
-            );
+            eprintln!("  🔍  \x1b[1mVerifying\x1b[0m  {}", args.file.display());
             divider();
 
             let result: Result<(), CryError> = (|| {
                 let content = std::fs::read(&args.file).map_err(CryError::Io)?;
-                let valid = crydna::verify_content_signature(
-                    &args.public_key,
-                    &content,
-                    &args.signature,
-                )?;
+                let valid =
+                    crydna::verify_content_signature(&args.public_key, &content, &args.signature)?;
 
                 kv("File", &args.file.display().to_string());
                 kv("Public key", &args.public_key);
@@ -326,7 +322,9 @@ fn main() {
                 divider();
 
                 if valid {
-                    eprintln!("  \x1b[32m✔\x1b[0m  Signature is \x1b[1mVALID\x1b[0m — file is authentic and untampered.");
+                    eprintln!(
+                        "  \x1b[32m✔\x1b[0m  Signature is \x1b[1mVALID\x1b[0m — file is authentic and untampered."
+                    );
                     Ok(())
                 } else {
                     Err(CryError::VerificationFailed(
@@ -377,18 +375,15 @@ fn read_passphrase(
         return Ok(Zeroizing::new(first_line.into_bytes()));
     }
 
-    let pass = Zeroizing::new(
-        rpassword::prompt_password("  Passphrase : ").map_err(CryError::Io)?,
-    );
+    let pass = Zeroizing::new(rpassword::prompt_password("  Passphrase : ").map_err(CryError::Io)?);
 
     if pass.is_empty() {
         return Err(CryError::EmptyPassphrase);
     }
 
     if confirm {
-        let confirm_pass = Zeroizing::new(
-            rpassword::prompt_password("  Confirm    : ").map_err(CryError::Io)?,
-        );
+        let confirm_pass =
+            Zeroizing::new(rpassword::prompt_password("  Confirm    : ").map_err(CryError::Io)?);
         if *pass != *confirm_pass {
             return Err(CryError::PassphraseMismatch);
         }
@@ -472,8 +467,7 @@ mod integration {
         std::fs::write(&cipher, b"existing").unwrap();
 
         let pass = passphrase("test");
-        let err =
-            encrypt_file(&plain, &cipher, &pass, Algorithm::Aes256Gcm, false).unwrap_err();
+        let err = encrypt_file(&plain, &cipher, &pass, Algorithm::Aes256Gcm, false).unwrap_err();
         assert!(
             matches!(err, CryError::FileExists(_)),
             "expected FileExists, got {err:?}"
@@ -508,13 +502,15 @@ mod integration {
             false,
         )
         .unwrap();
-        let err =
-            decrypt_file(&recovered, &cipher, &passphrase("wrong"), false).unwrap_err();
+        let err = decrypt_file(&recovered, &cipher, &passphrase("wrong"), false).unwrap_err();
         assert!(
             matches!(err, CryError::HeaderTampered | CryError::DecryptionFailed),
             "expected auth failure, got {err:?}"
         );
-        assert!(!recovered.exists(), "tmp file should be cleaned up on failure");
+        assert!(
+            !recovered.exists(),
+            "tmp file should be cleaned up on failure"
+        );
     }
 
     #[test]

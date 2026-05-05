@@ -70,9 +70,6 @@ const SEED_LEN: usize = 32;
 /// wiped from memory the moment this struct is dropped.
 pub struct Identity {
     pub signing_key: SigningKey,
-    pub namespace: String,
-    pub version: u32,
-    pub sub_id: Option<String>,
 }
 
 impl Identity {
@@ -116,12 +113,7 @@ impl Identity {
         // Build the signing key from the seed; seed is zeroized after this point.
         let signing_key = SigningKey::from_bytes(&*seed);
 
-        Ok(Identity {
-            signing_key,
-            namespace: namespace.to_string(),
-            version,
-            sub_id: sub_id.map(str::to_string),
-        })
+        Ok(Identity { signing_key })
     }
 
     // ── Public key views ────────────────────────────────────────────────────
@@ -163,12 +155,11 @@ impl Identity {
 
     // ── Signing ─────────────────────────────────────────────────────────────
 
-    /// Sign arbitrary bytes. Returns a 64-byte Ed25519 signature.
+    /// Private (secret) key as lowercase hex (64 characters).
     ///
-    /// For file signing prefer [`sign_content`] which includes domain
-    /// separation and content hashing.
-    pub fn sign_raw(&self, data: &[u8]) -> Signature {
-        self.signing_key.sign(data)
+    /// This is the 32-byte Ed25519 secret scalar used to derive the public key.
+    pub fn private_key_hex(&self) -> String {
+        bytes_to_hex(&self.signing_key.to_bytes())
     }
 
     /// Sign file content deterministically.
@@ -208,18 +199,18 @@ pub fn verify_content_signature(
     // Parse public key
     let pub_bytes = hex_to_bytes(public_key_hex)
         .map_err(|e| CryError::InvalidFormat(format!("Invalid public key hex: {e}")))?;
-    let pub_array: [u8; 32] = pub_bytes
-        .try_into()
-        .map_err(|_| CryError::InvalidFormat("Ed25519 public key must be exactly 32 bytes".into()))?;
+    let pub_array: [u8; 32] = pub_bytes.try_into().map_err(|_| {
+        CryError::InvalidFormat("Ed25519 public key must be exactly 32 bytes".into())
+    })?;
     let verifying_key = VerifyingKey::from_bytes(&pub_array)
         .map_err(|e| CryError::InvalidFormat(format!("Invalid Ed25519 public key: {e}")))?;
 
     // Parse signature
     let sig_bytes = hex_to_bytes(signature_hex)
         .map_err(|e| CryError::InvalidFormat(format!("Invalid signature hex: {e}")))?;
-    let sig_array: [u8; 64] = sig_bytes
-        .try_into()
-        .map_err(|_| CryError::InvalidFormat("Ed25519 signature must be exactly 64 bytes".into()))?;
+    let sig_array: [u8; 64] = sig_bytes.try_into().map_err(|_| {
+        CryError::InvalidFormat("Ed25519 signature must be exactly 64 bytes".into())
+    })?;
     let signature = Signature::from_bytes(&sig_array);
 
     // Reconstruct the signed message hash
@@ -334,9 +325,17 @@ pub struct IdentityArgs {
     #[arg(long = "ssh")]
     pub ssh: bool,
 
+    /// Also print an OpenSSH public key line (same output as --ssh)
+    #[arg(long = "openssh")]
+    pub openssh: bool,
+
     /// Comment embedded in the SSH key line (used with --ssh)
     #[arg(long = "comment", default_value = "CryDNA", value_name = "TEXT")]
     pub comment: String,
+
+    /// Print the private key in hex (dangerous; do not use on shared terminals)
+    #[arg(long = "show-private-key")]
+    pub show_private_key: bool,
 }
 
 #[derive(clap::Args, Debug)]
@@ -488,8 +487,14 @@ mod tests {
     fn ssh_line_format() {
         let id = Identity::derive(b"pass", "default", 0, None).unwrap();
         let line = id.ssh_authorized_keys_line("test@host");
-        assert!(line.starts_with("ssh-ed25519 "), "SSH line must start with ssh-ed25519");
-        assert!(line.ends_with("test@host"), "SSH line must end with comment");
+        assert!(
+            line.starts_with("ssh-ed25519 "),
+            "SSH line must start with ssh-ed25519"
+        );
+        assert!(
+            line.ends_with("test@host"),
+            "SSH line must end with comment"
+        );
     }
 
     #[test]
