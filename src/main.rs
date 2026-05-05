@@ -293,11 +293,6 @@ fn main() {
                     kv("Private key file", &path.display().to_string());
                 }
 
-                if let Some(path) = args.private_key_out.as_deref() {
-                    id.write_private_key_hex_file(path, args.force)?;
-                    kv("Private key file", &path.display().to_string());
-                }
-
                 Ok(())
             })
         }
