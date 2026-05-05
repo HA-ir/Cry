@@ -71,11 +71,21 @@ cry identity
 cry identity -n work --ssh
 cry identity -n work --key-version 2
 cry identity -n work --sub-id deploy
+cry identity -n work --show-private-key
 ```
 
-`cry identity` intentionally **does not print or export your private key**. It only
-shows public information (public key + fingerprint), while the private key stays
-in memory for the current process and is wiped on drop.
+By default, `cry identity` does **not** print your private key. It shows public
+information (public key + fingerprint), while the private key stays in memory
+for the current process and is wiped on drop.
+
+If you explicitly need to export it, pass:
+
+```sh
+cry identity --show-private-key
+```
+
+This prints the raw 32-byte Ed25519 secret key as lowercase hex. Treat that
+value like a password: anyone with it can sign as you.
 
 If you need to use the identity, run operations that consume it directly:
 
@@ -96,6 +106,38 @@ recreate the same identity on any machine, provide the exact same tuple:
 
 If any one of these differs (including typos/case changes), you'll derive a
 different keypair. If the original passphrase is lost, recovery is not possible.
+
+#### Why same passphrase can produce different keys
+
+CryDNA derives keys from this tuple:
+
+- passphrase
+- namespace (`--namespace`)
+- key version (`--key-version`)
+- sub-identity (`--sub-id`, optional)
+
+Using the same passphrase with `namespace=default` and `namespace=work` will
+produce different keys by design.
+
+#### SSH workflow (recommended)
+
+1. Derive your identity and print the OpenSSH public line:
+
+```sh
+cry identity -n work --ssh
+```
+
+2. Copy the printed `ssh-ed25519 ...` line into the server's
+`~/.ssh/authorized_keys`.
+
+3. For daily SSH login, use a normal local OpenSSH private key file (created by
+`ssh-keygen`) **or** convert CryDNA raw private key output to OpenSSH format
+using external tooling.
+
+> Note: `--show-private-key` prints raw 32-byte Ed25519 secret hex, not an
+> OpenSSH private key file.
+
+For a complete operational guide, see [`docs/identity-and-ssh.md`](docs/identity-and-ssh.md).
 
 ### All command aliases
 

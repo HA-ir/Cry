@@ -238,7 +238,11 @@ fn main() {
                 }
 
                 kv("Fingerprint", &id.fingerprint());
-                kv("Private key", "\x1b[2m[in memory only — never stored]\x1b[0m");
+                if args.show_private_key {
+                    kv("Private key (hex)", &id.private_key_hex());
+                } else {
+                    kv("Private key", "\x1b[2m[in memory only — use --show-private-key to print]\x1b[0m");
+                }
 
                 if args.ssh {
                     divider();

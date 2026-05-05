@@ -70,9 +70,6 @@ const SEED_LEN: usize = 32;
 /// wiped from memory the moment this struct is dropped.
 pub struct Identity {
     pub signing_key: SigningKey,
-    pub namespace: String,
-    pub version: u32,
-    pub sub_id: Option<String>,
 }
 
 impl Identity {
@@ -118,9 +115,6 @@ impl Identity {
 
         Ok(Identity {
             signing_key,
-            namespace: namespace.to_string(),
-            version,
-            sub_id: sub_id.map(str::to_string),
         })
     }
 
@@ -163,12 +157,11 @@ impl Identity {
 
     // ── Signing ─────────────────────────────────────────────────────────────
 
-    /// Sign arbitrary bytes. Returns a 64-byte Ed25519 signature.
+    /// Private (secret) key as lowercase hex (64 characters).
     ///
-    /// For file signing prefer [`sign_content`] which includes domain
-    /// separation and content hashing.
-    pub fn sign_raw(&self, data: &[u8]) -> Signature {
-        self.signing_key.sign(data)
+    /// This is the 32-byte Ed25519 secret scalar used to derive the public key.
+    pub fn private_key_hex(&self) -> String {
+        bytes_to_hex(&self.signing_key.to_bytes())
     }
 
     /// Sign file content deterministically.
@@ -337,6 +330,10 @@ pub struct IdentityArgs {
     /// Comment embedded in the SSH key line (used with --ssh)
     #[arg(long = "comment", default_value = "CryDNA", value_name = "TEXT")]
     pub comment: String,
+
+    /// Print the private key in hex (dangerous; do not use on shared terminals)
+    #[arg(long = "show-private-key")]
+    pub show_private_key: bool,
 }
 
 #[derive(clap::Args, Debug)]
