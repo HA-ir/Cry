@@ -263,12 +263,34 @@ fn main() {
                         )
                     })?;
                     let openssh_key = id.openssh_private_key(key_pass_str, &args.comment)?;
-                    divider();
-                    eprintln!("  \x1b[2mOpenSSH private key (encrypted):\x1b[0m");
-                    eprintln!();
-                    eprintln!("{openssh_key}");
-                    eprintln!("  \x1b[2mOpenSSH public key line:\x1b[0m");
-                    eprintln!("  {}", id.ssh_authorized_keys_line(&args.comment));
+                    if let Some(path) = args.private_key_out.as_deref() {
+                        let openssh_path = PathBuf::from(format!("{}.openssh_id", path.display()));
+                        if openssh_path.exists() && !args.force {
+                            return Err(CryError::FileExists(openssh_path.display().to_string()));
+                        }
+                        std::fs::write(&openssh_path, &openssh_key)?;
+                        #[cfg(unix)]
+                        {
+                            use std::os::unix::fs::PermissionsExt;
+                            std::fs::set_permissions(
+                                &openssh_path,
+                                std::fs::Permissions::from_mode(0o600),
+                            )?;
+                        }
+                        kv("OpenSSH key file", &openssh_path.display().to_string());
+                    } else {
+                        divider();
+                        eprintln!("  \x1b[2mOpenSSH private key (encrypted):\x1b[0m");
+                        eprintln!();
+                        eprintln!("{openssh_key}");
+                        eprintln!("  \x1b[2mOpenSSH public key line:\x1b[0m");
+                        eprintln!("  {}", id.ssh_authorized_keys_line(&args.comment));
+                    }
+                }
+
+                if let Some(path) = args.private_key_out.as_deref() {
+                    id.write_private_key_hex_file(path, args.force)?;
+                    kv("Private key file", &path.display().to_string());
                 }
 
                 if let Some(path) = args.private_key_out.as_deref() {
