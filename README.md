@@ -22,6 +22,13 @@ Passphrase-protected, authenticated, streaming — handles files of any size.
 
 ---
 
+
+## Documentation
+
+- [Identity + SSH guide](docs/identity-and-ssh.md)
+- [Architecture & security deep dive](docs/architecture-and-security.md)
+- [Developer guide](docs/developer-guide.md)
+
 ## Build
 
 ```sh
