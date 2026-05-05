@@ -39,6 +39,9 @@ ed25519-dalek = { version = "=2.1.1", features = ["digest"] }
  
 # Base64 encoding for public key export — pinned to <1.7 for Rust 1.75 compat
 base64ct = { version = "=1.6.0", features = ["alloc"] }
+
+# OpenSSH key encoding (public/private export)
+ssh-key = { version = "0.6", features = ["ed25519", "encryption"] }
  
 # Error handling
 anyhow = "1"

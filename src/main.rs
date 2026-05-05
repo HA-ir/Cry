@@ -245,7 +245,7 @@ fn main() {
                     kv("Private key", "\x1b[2m[in memory only — use --show-private-key to print]\x1b[0m");
                 }
 
-                if args.ssh || args.openssh {
+                if args.ssh {
                     divider();
                     eprintln!("  \x1b[2mSSH authorized_keys line:\x1b[0m");
                     eprintln!();
@@ -254,6 +254,17 @@ fn main() {
                     eprintln!(
                         "  \x1b[2mAppend the line above to ~/.ssh/authorized_keys on your server.\x1b[0m"
                     );
+                }
+                if args.openssh {
+                    let key_pass = read_openssh_passphrase()?;
+                    let openssh_key =
+                        id.openssh_private_key(&String::from_utf8_lossy(&key_pass), &args.comment)?;
+                    divider();
+                    eprintln!("  \x1b[2mOpenSSH private key (encrypted):\x1b[0m");
+                    eprintln!();
+                    eprintln!("{openssh_key}");
+                    eprintln!("  \x1b[2mOpenSSH public key line:\x1b[0m");
+                    eprintln!("  {}", id.ssh_authorized_keys_line(&args.comment));
                 }
 
                 Ok(())
@@ -389,6 +400,22 @@ fn read_passphrase(
         }
     }
 
+    Ok(Zeroizing::new(pass.as_bytes().to_vec()))
+}
+
+fn read_openssh_passphrase() -> Result<Zeroizing<Vec<u8>>, CryError> {
+    let pass = Zeroizing::new(
+        rpassword::prompt_password("  OpenSSH key passphrase : ").map_err(CryError::Io)?,
+    );
+    if pass.is_empty() {
+        return Err(CryError::EmptyPassphrase);
+    }
+    let confirm = Zeroizing::new(
+        rpassword::prompt_password("  Confirm OpenSSH passphrase : ").map_err(CryError::Io)?,
+    );
+    if *pass != *confirm {
+        return Err(CryError::PassphraseMismatch);
+    }
     Ok(Zeroizing::new(pass.as_bytes().to_vec()))
 }
 
