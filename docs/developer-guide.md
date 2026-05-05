@@ -62,4 +62,5 @@ Before opening a PR:
 - Re-run benchmarks on representative hardware (`cry bench`).
 - Validate `encrypt/decrypt` round-trip for both algorithms on small + large files.
 - Validate identity/sign/verify flows and OpenSSH export path.
+- Validate `--private-key-out` writes both `<FILE>` and `<FILE>.openssh_id` when `--openssh` is set.
 - Re-read threat-model section for any new out-of-scope assumptions introduced by changes.

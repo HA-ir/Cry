@@ -38,7 +38,7 @@
 //! - Signatures are computed over `SHA-256("CryDNA-file-sig-v1:" || content_hash)`
 //!   to bind the domain and prevent cross-protocol misuse.
 
-use std::io::Write as _;
+use std::{io::Write as _, path::Path};
 
 use argon2::{Algorithm as Argon2Algo, Argon2, Params, Version};
 use base64ct::{Base64, Encoding as _};
@@ -167,11 +167,7 @@ impl Identity {
     /// Returns a UTF-8 PEM string suitable for writing directly to disk.
     /// The internal encoder returns a zeroizing string wrapper; we convert
     /// to a plain `String` at this boundary to match the public API.
-    pub fn openssh_private_key(
-        &self,
-        passphrase: &str,
-        comment: &str,
-    ) -> Result<String, CryError> {
+    pub fn openssh_private_key(&self, passphrase: &str, comment: &str) -> Result<String, CryError> {
         let keypair = Ed25519Keypair::from_bytes(&self.signing_key.to_keypair_bytes())
             .map_err(|e| CryError::InvalidFormat(format!("OpenSSH key build failed: {e}")))?;
         let private = PrivateKey::new(KeypairData::Ed25519(keypair), comment)
@@ -185,7 +181,6 @@ impl Identity {
             .map_err(|e| CryError::InvalidFormat(format!("OpenSSH key encode failed: {e}")))
     }
 
-
     // ── Signing ─────────────────────────────────────────────────────────────
 
     /// Private (secret) key as lowercase hex (64 characters).
@@ -193,6 +188,26 @@ impl Identity {
     /// This is the 32-byte Ed25519 secret scalar used to derive the public key.
     pub fn private_key_hex(&self) -> String {
         bytes_to_hex(&self.signing_key.to_bytes())
+    }
+
+    /// Write the private key as lowercase hex to a file.
+    ///
+    /// Refuses to overwrite unless `force` is true. On Unix, permissions are
+    /// tightened to `0600` after write.
+    pub fn write_private_key_hex_file(&self, path: &Path, force: bool) -> Result<(), CryError> {
+        if path.exists() && !force {
+            return Err(CryError::FileExists(path.display().to_string()));
+        }
+
+        std::fs::write(path, self.private_key_hex())?;
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+        }
+
+        Ok(())
     }
 
     /// Sign file content deterministically.
@@ -361,6 +376,14 @@ pub struct IdentityArgs {
     /// Print encrypted OpenSSH private key + OpenSSH public key line
     #[arg(long = "openssh")]
     pub openssh: bool,
+
+    /// Write the private key (hex) to a file (dangerous; protect this file)
+    #[arg(long = "private-key-out", value_name = "FILE")]
+    pub private_key_out: Option<std::path::PathBuf>,
+
+    /// Overwrite output files for identity exports
+    #[arg(long = "force", default_value_t = false)]
+    pub force: bool,
 
     /// Comment embedded in the SSH key line (used with --ssh)
     #[arg(long = "comment", default_value = "CryDNA", value_name = "TEXT")]
