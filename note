@@ -1,0 +1,60 @@
+edit --ssh flag to a command that allows connecting to an SSH host using a keypair derived from a passphrase, WITHOUT writing any key files to disk.
+
+Behavior:
+
+1. The command usage should look like:
+   cry ssh --passphrase <pass> user@host
+
+   or:
+   cry ssh user@host
+   (then securely prompt for passphrase)
+
+2. From the passphrase:
+   - Derive a deterministic Ed25519 keypair
+   - Use a secure KDF (Argon2id with salt)
+   - Ensure same passphrase → same keypair
+
+3. Convert the keypair into a valid OpenSSH private key (in-memory only).
+
+4. DO NOT write the key to disk.
+
+5. Load the private key into an SSH agent programmatically:
+   - Either:
+     a) Spawn a temporary ssh-agent process
+     b) Or implement agent protocol client
+   - Add the key to the agent from memory
+
+6. Spawn an SSH connection:
+   - Use system `ssh`
+   - Connect to user@host
+   - Ensure it uses the injected key
+
+7. After the session:
+   - Kill the agent
+   - Zero sensitive memory
+
+Constraints:
+
+- No temporary files on disk
+- No double passphrase layers
+- Use OpenSSH-compatible key format
+- Use secure memory handling where possible
+
+Output:
+
+- Provide full Rust implementation
+- Show how to:
+  - derive key (Argon2 → seed → Ed25519)
+  - encode OpenSSH key in memory
+  - talk to ssh-agent (or spawn it)
+- Show CLI usage examples
+- Explain security tradeoffs briefly
+
+
+
+--- 
+
+
+identity -> keygen
+cry keygen --new --bit 4096 --algorithm er/rsa/...
+            

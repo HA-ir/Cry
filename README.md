@@ -12,16 +12,31 @@ Passphrase-protected, authenticated, streaming — handles files of any size.
 | 1 | **Unified `Algorithm` enum** — `AlgoId` and `Algorithm` merged into one `repr(u8)` + `clap::ValueEnum` type; no more silent `From` conversion between two parallel enums |
 | 2 | **Counter nonce** — per-chunk nonce uses the standard 96-bit big-endian add-with-carry construction (same as TLS 1.3), replacing the fragile XOR scheme |
 | 3 | **`EncryptionFailed` error** — `encrypt_chunk` no longer incorrectly returns `DecryptionFailed` on AEAD encrypt errors |
-| 4 | **`--force` on encrypt/decrypt** — both commands now refuse to silently overwrite an existing output file unless `--force` is passed keygen |
+| 4 | **`--force` on encrypt/decrypt** — both commands now refuse to silently overwrite an existing output file unless `--force` is passed |
 | 5 | **Correct empty-file handling** — `chunk_count` is now `0` for empty files (was `max(1, 0) = 1`), eliminating a spurious truncation warning on decrypt |
 | 6 | **`--pass-env` removed** — environment variables are visible in `/proc`, `ps`, and child processes; removed to avoid giving users a false sense of security |
 | 7 | **Progress reporting** — multi-chunk files print `chunk N/M` to stderr during encrypt/decrypt |
 | 8 | **Integration tests** — file-based tests cover round-trip (AES + ChaCha), empty files, `--force`, overwrite guard, wrong-passphrase cleanup, and tmp-file removal on failure |
 | 9 | **OpenSSH export polish** — CryDNA OpenSSH private key export now documents passphrase behavior and returns the PEM as a plain `String` for simpler downstream handling |
-
+| 10 | **`cry ssh`** — connect to SSH hosts using a passphrase-derived Ed25519 keypair; the private key is injected into a short-lived agent subprocess and never written to disk (Unix only) |
 
 ---
 
+## Platform support
+
+| Platform | `encrypt` / `decrypt` | `identity` / `sign` / `verify` | `cry ssh` |
+|---|---|---|---|
+| Linux | ✅ | ✅ | ✅ |
+| macOS | ✅ | ✅ | ✅ |
+| FreeBSD / OpenBSD / NetBSD | ✅ | ✅ | ✅ |
+| Windows (native) | ✅ | ✅ | ❌ (Unix agent protocol not available) |
+| WSL (Windows Subsystem for Linux) | ✅ | ✅ | ✅ |
+
+`cry ssh` depends on Unix-domain sockets (`UnixStream`) and the `ssh-agent` binary. It is gated behind `#[cfg(unix)]` and is entirely absent from Windows builds — no stub, no runtime error. All other subcommands compile and run on Windows unchanged.
+
+**Prerequisites for `cry ssh`:** `ssh` and `ssh-agent` must be on `PATH`. On most Linux distributions this means `openssh-client`. On macOS both are included in the OS.
+
+---
 
 ## Documentation
 
@@ -95,10 +110,74 @@ If you explicitly need to export it, pass:
 cry identity --show-private-key
 ```
 
-This prints the raw 32-byte Ed25519 secret key as lowercase hex. Treat that
-value like a password: anyone with it can sign as you.
+### SSH (Unix only)
 
-To store private keys in files instead of printing, use:
+Connect to an SSH host using a deterministic Ed25519 key derived from your
+passphrase. The private key is never written to disk.
+
+**One-time server setup** — get the public key and add it to the server:
+
+```sh
+# Print the authorized_keys line for the default namespace
+cry identity --ssh
+
+# Print the authorized_keys line for a named namespace
+cry identity -n work --ssh
+```
+
+Copy the printed `ssh-ed25519 ...` line to `~/.ssh/authorized_keys` on the server.
+
+**Connecting:**
+
+```sh
+# Basic connection — prompts for passphrase
+cry ssh user@host
+
+# Named namespace (must match what you added to authorized_keys)
+cry ssh user@host -n work
+
+# Key version rotation
+cry ssh user@host -n work --key-version 2
+
+# Sub-identity
+cry ssh user@host -n work --sub-id deploy
+
+# Non-interactive (CI)
+cry ssh user@host --pass-file /run/secrets/passphrase
+
+# Custom port
+cry ssh user@host -p 2222
+
+# Forward extra flags to ssh(1) after --
+cry ssh user@host -- -v -L 8080:localhost:8080 -A
+cry ssh user@host -- -o StrictHostKeyChecking=accept-new
+```
+
+What happens under the hood:
+
+1. Argon2id derives a 32-byte seed from the passphrase (same as `cry identity`).
+2. An Ed25519 keypair is produced from the seed.
+3. A fresh `ssh-agent` subprocess is spawned.
+4. The keypair is injected into the agent over a Unix socket (in-memory transfer).
+5. `ssh` is exec'd with `SSH_AUTH_SOCK` pointing at the ephemeral agent.
+6. When the session ends the agent is killed; its socket disappears.
+
+The passphrase is used only for Argon2id KDF — there is no second passphrase layer on the key itself.
+
+#### Identity recovery for SSH
+
+SSH keys derived by `cry ssh` are fully deterministic. To regenerate the same
+keypair on any machine, use the same passphrase, namespace, key version, and
+sub-id. If any value differs (including a typo), you get a different keypair.
+
+To rotate: increment `--key-version` and re-add the new public key to the
+server (`cry identity -n work --key-version 2 --ssh`).
+
+---
+
+## Identity (CryDNA) — details
+
+See also [docs/identity-and-ssh.md](docs/identity-and-ssh.md) for a complete guide.
 
 ```sh
 cry identity -n work --private-key-out ./work.id
@@ -111,25 +190,10 @@ This writes:
 
 Use `--force` to overwrite existing files.
 
-If you need to use the identity, run operations that consume it directly:
-
 ```sh
 cry sign -f release.tar.gz -n work
 cry verify -f release.tar.gz -s <SIGNATURE_HEX> -k <PUBLIC_KEY_HEX>
 ```
-
-#### Identity recovery
-
-There is no "private key recovery" output because keys are deterministic. To
-recreate the same identity on any machine, provide the exact same tuple:
-
-- passphrase
-- namespace (`-n/--namespace`)
-- key version (`--key-version`)
-- sub-identity (`--sub-id`, if used)
-
-If any one of these differs (including typos/case changes), you'll derive a
-different keypair. If the original passphrase is lost, recovery is not possible.
 
 #### Why same passphrase can produce different keys
 
@@ -143,33 +207,15 @@ CryDNA derives keys from this tuple:
 Using the same passphrase with `namespace=default` and `namespace=work` will
 produce different keys by design.
 
-#### SSH workflow (recommended)
+---
 
-1. Derive your identity and print the OpenSSH public line:
-
-```sh
-cry identity -n work --ssh
-# outputs encrypted OpenSSH private key + public key line:
-cry identity -n work --openssh
-```
-
-2. Copy the printed `ssh-ed25519 ...` line into the server's
-`~/.ssh/authorized_keys`.
-
-3. If you use `--openssh`, Cry prompts for a separate passphrase and either:
-   - prints an encrypted `OPENSSH PRIVATE KEY` block (default), or
-   - writes it to `<private-key-out>.openssh_id` when `--private-key-out` is provided.
-
-> Note: `--show-private-key` still prints raw 32-byte Ed25519 secret hex.
-
-For a complete operational guide, see [`docs/identity-and-ssh.md`](docs/identity-and-ssh.md).
-
-### All command aliases
+## All command aliases
 
 ```sh
 cry encrypt / en / -en
 cry decrypt / de / -de
 cry identity / id / -id
+cry ssh                         # Unix only
 ```
 
 ---
@@ -215,9 +261,12 @@ regardless of the base nonce bit pattern.
 | Parallelism | 1      | Single-threaded, portable         |
 | Output      | 32 B   | 256-bit key for AES-256 / ChaCha  |
 
+The same parameters are used for file encryption KDF and CryDNA identity
+derivation, ensuring consistent cost for both operations.
+
 ---
 
-### Benchmark performance
+## Benchmarks
 
 ```sh
 cry bench
@@ -235,7 +284,8 @@ cargo test
 ```
 
 Covers: round-trip (AES + ChaCha), multi-chunk, empty files, tamper detection,
-wrong-passphrase rejection, `--force`, overwrite guard, tmp-file cleanup.
+wrong-passphrase rejection, `--force`, overwrite guard, tmp-file cleanup,
+identity determinism, sign/verify round-trip, SSH agent protocol parser.
 
 ---
 
@@ -255,55 +305,41 @@ wrong-passphrase rejection, `--force`, overwrite guard, tmp-file cleanup.
 - **Plaintext confidentiality** of file contents at rest and in transit as `.cry` blobs.
 - **Integrity and authenticity** of encrypted files (header + chunk stream).
 - **Passphrase-derived key secrecy** during runtime and after process exit.
+- **SSH private key secrecy** — the key lives only in a short-lived agent process and is never written to disk.
 
 ### Trust assumptions
 
 - The host OS, Rust toolchain, and CPU are not actively compromised.
-- Cryptographic primitives (AES-256-GCM, ChaCha20-Poly1305, HMAC-SHA256, Argon2id, SHA-256) behave as designed.
+- Cryptographic primitives (AES-256-GCM, ChaCha20-Poly1305, HMAC-SHA256, Argon2id, SHA-256, Ed25519) behave as designed.
 - Users choose sufficiently strong passphrases or use high-entropy secrets via `--pass-file`.
+- The `ssh-agent` binary is the genuine OpenSSH implementation from the OS package manager.
 
-### In scope (attacker capabilities this tool is designed to resist)
+### In scope
 
 - Reading encrypted `.cry` files without the passphrase.
-- Offline brute-force attempts against captured ciphertext (cost amplified by Argon2id parameters).
+- Offline brute-force attempts against captured ciphertext.
 - File tampering: modifying header bytes, chunk lengths, chunk ciphertext/tag, reordering/removing chunks, or truncation.
-- Nonce-misuse from chunking logic (mitigated by per-chunk 96-bit counter nonce derivation).
-- Accidental destructive overwrite of output files (mitigated by explicit `--force`).
+- Nonce-misuse from chunking logic.
+- Accidental destructive overwrite of output files.
+- SSH private key exposure via disk writes.
 
 ### Out of scope / not guaranteed
 
 - Compromised endpoint security (malware, keyloggers, root/admin attackers, memory scraping while process runs).
-- Passphrase theft from unsafe user practices (weak passphrases, shared secret files, shell history leaks).
+- Passphrase theft from unsafe user practices.
 - Metadata privacy: file names, paths, sizes, timestamps, and access patterns are not hidden.
 - Plausible deniability or hidden-volume semantics.
 - Secure deletion of source plaintext or filesystem/journal remnants.
 - Side-channel resistance beyond what underlying libraries/platform provide.
 - Multi-user policy controls, remote KMS/HSM integration, or enterprise key lifecycle governance.
+- Protection against a malicious `ssh-agent` binary or a compromised `SSH_AUTH_SOCK` socket.
 
-### Security properties provided
-
-- **Confidentiality:** AEAD encryption for every chunk.
-- **Integrity/authenticity:** header HMAC + per-chunk AEAD authentication.
-- **Wrong-key detection:** decryption fails on authentication mismatch.
-- **Format robustness:** explicit structural checks for chunk framing and truncation.
-
-### Misuse-resistance guidance
-
-- Prefer long, unique passphrases (or random secrets in `0600` passphrase files).
-- Keep encrypted backups; loss of passphrase means permanent data loss.
-- Verify fingerprints when handling generated key files.
-- Treat decrypted outputs as sensitive and manage their lifecycle separately.
-
-
-## Security notes
+### Security notes
 
 - Passphrases are read with `rpassword` (no terminal echo).
 - All key material uses `Zeroizing<T>` — wiped from memory on drop.
-- The file header is not encrypted, but it is HMAC-authenticated. An attacker
-  without the passphrase cannot modify any header byte without detection.
-- Decryption fails loudly on wrong passphrase, corruption, truncation, or
-  tampering at the header, chunk, or structural level.
-- Environment variables are intentionally not supported as a passphrase source —
-  they are visible in `/proc/<pid>/environ`, `ps`, and to child processes.
-  Use `--pass-file` with a `0600` file, or prompt interactively.
+- The file header is not encrypted, but it is HMAC-authenticated.
+- Decryption fails loudly on wrong passphrase, corruption, truncation, or tampering.
+- Environment variables are intentionally not supported as a passphrase source.
+- `cry ssh` injects keys into an isolated, ephemeral `ssh-agent` subprocess. The agent only lives for the SSH session and is killed on exit. Your persistent SSH agent (if any) is unaffected.
 - Keep backups — there is no key recovery mechanism.

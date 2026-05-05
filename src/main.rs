@@ -3,6 +3,7 @@
 //! Supported algorithms: AES-256-GCM, ChaCha20-Poly1305
 //! Key derivation: Argon2id (64 MiB, 3 iterations)
 //! Identity: CryDNA — deterministic Ed25519 keypairs from a passphrase
+//! SSH: ephemeral key injection via a temporary ssh-agent (Unix only)
 
 mod bench;
 mod cipher;
@@ -10,6 +11,8 @@ mod crydna;
 mod error;
 mod header;
 mod kdf;
+#[cfg(unix)]
+mod ssh;
 
 use std::path::{Path, PathBuf};
 
@@ -51,7 +54,7 @@ fn kv(label: &str, value: &str) {
 #[command(
     name = "cry",
     version = env!("CARGO_PKG_VERSION"),
-    about = "Encrypt · Decrypt · Identity — passphrase-protected, authenticated",
+    about = "Encrypt · Decrypt · Identity · SSH — passphrase-protected, authenticated",
     after_help = concat!(
         "\x1b[2mExamples:\x1b[0m\n",
         "  cry encrypt  -p secret.txt -c secret.cry\n",
@@ -64,6 +67,9 @@ fn kv(label: &str, value: &str) {
         "  cry identity -n work --sub-id deploy        # sub-identity\n",
         "  cry sign     -f report.pdf -n work          # sign a file\n",
         "  cry verify   -f report.pdf -s <SIG> -k <PUB>  # verify a signature\n",
+        "  cry ssh      user@host                      # SSH with ephemeral derived key\n",
+        "  cry ssh      user@host -n work              # SSH using 'work' namespace key\n",
+        "  cry ssh      user@host -- -v -L 8080:localhost:8080  # extra ssh flags\n",
     )
 )]
 struct Cli {
@@ -99,6 +105,21 @@ enum Command {
     /// Run quick crypto benchmarks
     #[command(name = "bench")]
     Bench(bench::BenchArgs),
+
+    /// Connect to an SSH host using a passphrase-derived Ed25519 key
+    ///
+    /// Derives a CryDNA Ed25519 keypair, injects it into a short-lived
+    /// ssh-agent subprocess, then opens an SSH session. The private key
+    /// never touches disk at any point. The agent is killed when the
+    /// session ends.
+    ///
+    /// Prerequisites: `ssh` and `ssh-agent` must be on PATH.
+    ///
+    /// The public key to add to the server's authorized_keys is printed
+    /// by `cry identity [--namespace NAME] --ssh`.
+    #[cfg(unix)]
+    #[command(name = "ssh")]
+    Ssh(ssh::SshArgs),
 }
 
 // ── Encrypt ───────────────────────────────────────────────────────────────────
@@ -198,7 +219,7 @@ fn main() {
                 .and_then(|p| decrypt_file(&args.plain, &args.cipher, &p, args.force))
         }
 
-        // ── Identity (CryDNA) ─────────────────────────────────────────────
+        // ── Identity (CryDNA) ─────────────────────────────────────────────────
         Command::Identity(args) => {
             let p = &args.params;
 
@@ -375,7 +396,42 @@ fn main() {
             result
         }
 
+        // ── Bench ─────────────────────────────────────────────────────────────
         Command::Bench(args) => bench::run_bench(args),
+
+        // ── SSH (Unix only) ───────────────────────────────────────────────────
+        #[cfg(unix)]
+        Command::Ssh(args) => {
+            // Build namespace label for the banner.
+            let ns_label = {
+                let mut s = format!("namespace={:?}", args.params.namespace);
+                if args.params.key_version > 0 {
+                    s.push_str(&format!("  v{}", args.params.key_version));
+                }
+                if let Some(ref sub) = args.params.sub_id {
+                    s.push_str(&format!("  sub={sub:?}"));
+                }
+                s
+            };
+
+            eprintln!(
+                "  🔑  \x1b[1mSSH\x1b[0m  {}  \x1b[2m({})\x1b[0m",
+                args.target, ns_label
+            );
+            section("⚙", "Key type", "Ed25519 (CryDNA — ephemeral, no disk write)");
+            section("🔑", "KDF", "Argon2id  (64 MiB · 3 iter · 1 thread)");
+            eprintln!(
+                "  \x1b[2mℹ  To add the public key to the server, run:\x1b[0m"
+            );
+            eprintln!(
+                "  \x1b[2m   cry identity -n {} --ssh\x1b[0m",
+                args.params.namespace
+            );
+            divider();
+
+            read_passphrase(args.params.pass_file.as_deref(), false)
+                .and_then(|p| ssh::run_ssh(args, &p))
+        }
     };
 
     eprintln!();
