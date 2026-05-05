@@ -369,10 +369,6 @@ pub struct IdentityArgs {
     #[arg(long = "format", default_value = "all", value_name = "FMT")]
     pub format: PubKeyFormat,
 
-    /// Also print an SSH authorized_keys line
-    #[arg(long = "ssh")]
-    pub ssh: bool,
-
     /// Print encrypted OpenSSH private key + OpenSSH public key line
     #[arg(long = "openssh")]
     pub openssh: bool,

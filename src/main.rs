@@ -61,7 +61,6 @@ fn kv(label: &str, value: &str) {
         "  cry encrypt  -p secret.txt -c secret.cry -a chacha20poly1305\n",
         "  cry decrypt  -c secret.cry -p recovered.txt\n",
         "  cry identity                                # show default identity\n",
-        "  cry identity -n work --ssh                  # work key, SSH format\n",
         "  cry identity -n work --openssh              # work key, OpenSSH format\n",
         "  cry identity -n work --key-version 2        # rotated key\n",
         "  cry identity -n work --sub-id deploy        # sub-identity\n",
@@ -266,16 +265,6 @@ fn main() {
                     kv("Private key", "\x1b[2m[in memory only — use --show-private-key to print]\x1b[0m");
                 }
 
-                if args.ssh {
-                    divider();
-                    eprintln!("  \x1b[2mSSH authorized_keys line:\x1b[0m");
-                    eprintln!();
-                    eprintln!("  {}", id.ssh_authorized_keys_line(&args.comment));
-                    eprintln!();
-                    eprintln!(
-                        "  \x1b[2mAppend the line above to ~/.ssh/authorized_keys on your server.\x1b[0m"
-                    );
-                }
                 if args.openssh {
                     let key_pass = read_openssh_passphrase()?;
                     let key_pass_str = std::str::from_utf8(&key_pass).map_err(|_| {
@@ -306,6 +295,10 @@ fn main() {
                         eprintln!("{openssh_key}");
                         eprintln!("  \x1b[2mOpenSSH public key line:\x1b[0m");
                         eprintln!("  {}", id.ssh_authorized_keys_line(&args.comment));
+                        eprintln!();
+                        eprintln!(
+                            "  \x1b[2mAppend the line above to ~/.ssh/authorized_keys on your server.\x1b[0m"
+                        );
                     }
                 }
 
