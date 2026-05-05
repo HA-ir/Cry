@@ -34,6 +34,7 @@ These produce different keys by design.
 - fingerprint
 - optional SSH public line (`--ssh`)
 - encrypted OpenSSH private key + public line (`--openssh`)
+- optional private key files via `--private-key-out <FILE>`
 
 By default it does not print private key material.
 
@@ -75,8 +76,14 @@ chmod 600 ~/.ssh/authorized_keys
 ### Client
 
 If you use `--openssh`, Cry prints an encrypted OpenSSH private key block and
-matching public key line. Save the private block to a file (for example
-`~/.ssh/id_ed25519_crydna`) and set permissions to `600`.
+matching public key line by default.
+
+If you also pass `--private-key-out <FILE>`, Cry writes files directly:
+
+- `<FILE>` → raw CryDNA private key hex
+- `<FILE>.openssh_id` → encrypted OpenSSH private key PEM
+
+Use `--force` to overwrite existing files.
 
 You can also use a standard OpenSSH private key file for authentication:
 

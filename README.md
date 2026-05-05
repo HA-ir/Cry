@@ -79,6 +79,7 @@ The first line of the file is used. Set permissions to `0600`.
 cry identity
 cry identity -n work --ssh
 cry identity -n work --openssh
+cry identity -n work --openssh --private-key-out ~/.ssh/id_ed25519_crydna
 cry identity -n work --key-version 2
 cry identity -n work --sub-id deploy
 cry identity -n work --show-private-key
@@ -96,6 +97,19 @@ cry identity --show-private-key
 
 This prints the raw 32-byte Ed25519 secret key as lowercase hex. Treat that
 value like a password: anyone with it can sign as you.
+
+To store private keys in files instead of printing, use:
+
+```sh
+cry identity -n work --private-key-out ./work.id
+cry identity -n work --openssh --private-key-out ./work.id
+```
+
+This writes:
+- `./work.id` (raw CryDNA private key, lowercase hex)
+- `./work.id.openssh_id` (encrypted OpenSSH private key, when `--openssh` is used)
+
+Use `--force` to overwrite existing files.
 
 If you need to use the identity, run operations that consume it directly:
 
@@ -142,8 +156,9 @@ cry identity -n work --openssh
 2. Copy the printed `ssh-ed25519 ...` line into the server's
 `~/.ssh/authorized_keys`.
 
-3. If you use `--openssh`, Cry prompts for a separate passphrase and prints an
-encrypted `OPENSSH PRIVATE KEY` block plus matching `ssh-ed25519 ...` public line.
+3. If you use `--openssh`, Cry prompts for a separate passphrase and either:
+   - prints an encrypted `OPENSSH PRIVATE KEY` block (default), or
+   - writes it to `<private-key-out>.openssh_id` when `--private-key-out` is provided.
 
 > Note: `--show-private-key` still prints raw 32-byte Ed25519 secret hex.
 
