@@ -257,14 +257,23 @@ fn main() {
                 }
                 if args.openssh {
                     let key_pass = read_openssh_passphrase()?;
-                    let openssh_key =
-                        id.openssh_private_key(&String::from_utf8_lossy(&key_pass), &args.comment)?;
+                    let key_pass_str = std::str::from_utf8(&key_pass).map_err(|_| {
+                        CryError::InvalidFormat(
+                            "OpenSSH key passphrase must be valid UTF-8".to_string(),
+                        )
+                    })?;
+                    let openssh_key = id.openssh_private_key(key_pass_str, &args.comment)?;
                     divider();
                     eprintln!("  \x1b[2mOpenSSH private key (encrypted):\x1b[0m");
                     eprintln!();
                     eprintln!("{openssh_key}");
                     eprintln!("  \x1b[2mOpenSSH public key line:\x1b[0m");
                     eprintln!("  {}", id.ssh_authorized_keys_line(&args.comment));
+                }
+
+                if let Some(path) = args.private_key_out.as_deref() {
+                    id.write_private_key_hex_file(path, args.force)?;
+                    kv("Private key file", &path.display().to_string());
                 }
 
                 Ok(())
@@ -378,12 +387,15 @@ fn read_passphrase(
     confirm: bool,
 ) -> Result<Zeroizing<Vec<u8>>, CryError> {
     if let Some(path) = pass_file {
-        let contents = std::fs::read_to_string(path)?;
-        let first_line = contents.lines().next().unwrap_or("").to_string();
+        let contents = Zeroizing::new(std::fs::read(path)?);
+        let first_line = contents
+            .split(|b| *b == b'\n' || *b == b'\r')
+            .next()
+            .unwrap_or(&[]);
         if first_line.is_empty() {
             return Err(CryError::EmptyPassphrase);
         }
-        return Ok(Zeroizing::new(first_line.into_bytes()));
+        return Ok(Zeroizing::new(first_line.to_vec()));
     }
 
     let pass = Zeroizing::new(rpassword::prompt_password("  Passphrase : ").map_err(CryError::Io)?);
