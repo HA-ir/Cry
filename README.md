@@ -107,6 +107,38 @@ recreate the same identity on any machine, provide the exact same tuple:
 If any one of these differs (including typos/case changes), you'll derive a
 different keypair. If the original passphrase is lost, recovery is not possible.
 
+#### Why same passphrase can produce different keys
+
+CryDNA derives keys from this tuple:
+
+- passphrase
+- namespace (`--namespace`)
+- key version (`--key-version`)
+- sub-identity (`--sub-id`, optional)
+
+Using the same passphrase with `namespace=default` and `namespace=work` will
+produce different keys by design.
+
+#### SSH workflow (recommended)
+
+1. Derive your identity and print the OpenSSH public line:
+
+```sh
+cry identity -n work --ssh
+```
+
+2. Copy the printed `ssh-ed25519 ...` line into the server's
+`~/.ssh/authorized_keys`.
+
+3. For daily SSH login, use a normal local OpenSSH private key file (created by
+`ssh-keygen`) **or** convert CryDNA raw private key output to OpenSSH format
+using external tooling.
+
+> Note: `--show-private-key` prints raw 32-byte Ed25519 secret hex, not an
+> OpenSSH private key file.
+
+For a complete operational guide, see [`docs/identity-and-ssh.md`](docs/identity-and-ssh.md).
+
 ### All command aliases
 
 ```sh
