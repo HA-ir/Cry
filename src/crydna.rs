@@ -44,7 +44,10 @@ use argon2::{Algorithm as Argon2Algo, Argon2, Params, Version};
 use base64ct::{Base64, Encoding as _};
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use sha2::{Digest, Sha256};
-use ssh_key::{LineEnding, private::PrivateKey};
+use ssh_key::{
+    LineEnding,
+    private::{Ed25519Keypair, KeypairData, PrivateKey},
+};
 use zeroize::Zeroizing;
 
 use crate::error::CryError;
@@ -160,7 +163,9 @@ impl Identity {
         passphrase: &str,
         comment: &str,
     ) -> Result<String, CryError> {
-        let private = PrivateKey::from_ed25519(&self.signing_key.to_keypair_bytes(), comment)
+        let keypair = Ed25519Keypair::from_bytes(&self.signing_key.to_keypair_bytes())
+            .map_err(|e| CryError::InvalidFormat(format!("OpenSSH key build failed: {e}")))?;
+        let private = PrivateKey::new(KeypairData::Ed25519(keypair), comment)
             .map_err(|e| CryError::InvalidFormat(format!("OpenSSH key build failed: {e}")))?;
         private
             .encrypt(rand::thread_rng(), passphrase)
