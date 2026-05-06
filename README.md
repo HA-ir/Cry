@@ -1,4 +1,4 @@
-# cry 🔐  v0.5.0
+# cry 🔐  v0.6.0
 
 A fast, minimal CLI cryptography tool written in Rust.  
 Ephemeral SSH key, Passphrase-protected, authenticated, streaming — handles files of any size.
