@@ -1,25 +1,35 @@
 # cry 🔐  v0.6.0
 
 A fast, minimal CLI cryptography tool written in Rust.  
-Ephemeral SSH key, Passphrase-protected, authenticated, streaming — handles files of any size.
+Ephemeral SSH keys. Passphrase-protected. Authenticated. Streaming — handles files of any size.
 
 ---
 
-`cry` now combines:
-- authenticated file encryption/decryption,
-- deterministic key derivation from passphrases,
-- secure random key generation,
-- and ephemeral SSH key usage with no-disk private key flow.
+## What is cry?
+
+`cry` is a security-focused command-line tool for:
+
+- **File encryption and decryption** — AES-256-GCM or ChaCha20-Poly1305, with streaming chunk-based processing, authenticated headers, and atomic output writes.
+- **Deterministic key derivation** — reproduce the same Ed25519 or AES key on any machine from the same passphrase + context tuple. No key files to sync or back up.
+- **Random key generation** — fresh, cryptographically secure keys when reproducibility is not needed.
+- **File signing and verification** — Ed25519 signatures over file content with domain separation.
+- **Ephemeral SSH authentication** — derive a key, inject it into a short-lived agent subprocess, run an SSH session, and let the key vanish when the session ends.
+
+`cry` is designed for workflows where reproducibility, minimal key exposure, and auditability matter more than feature breadth.
 
 ---
 
-## Project description
+## Feature summary
 
-`cry` is designed for security-focused CLI workflows where reproducibility and low key exposure matter:
-
-- **Deterministic key derivation**: derive the same key material from the same passphrase + context tuple (namespace, key version, sub-id).
-- **Ephemeral SSH keys**: `cry ssh` derives an Ed25519 identity, injects it into a short-lived SSH auth path, and uses it for the session.
-- **No-disk key usage**: private key material for SSH sessions is handled in memory and lifecycle-managed to minimize persistence risk.
+| Feature | Algorithm / Primitive |
+|---|---|
+| File encryption | AES-256-GCM or ChaCha20-Poly1305 (AEAD) |
+| Key derivation (KDF) | Argon2id — 64 MiB, 3 iterations, 1 thread |
+| Header authentication | HMAC-SHA256 with HKDF-Expand sub-key |
+| Identity | Ed25519 (deterministic from passphrase) |
+| SSH | Ephemeral Ed25519 via `ssh-agent` (Unix) or temp file (Windows) |
+| Random keygen | Ed25519, RSA, AES-256 |
+| Deterministic keygen | Ed25519, AES-256 (via passphrase + context) |
 
 ---
 
@@ -27,35 +37,38 @@ Ephemeral SSH key, Passphrase-protected, authenticated, streaming — handles fi
 
 | # | Change |
 |---|--------|
-| 1 | Added `cry ssh` with ephemeral in-memory SSH keys |
-| 2 | Introduced `keygen` for secure random key generation |
-| 3 | Introduced `derive` for deterministic keys from passphrases |
-| 4 | Removed legacy `identity` command |
+| 1 | Added `cry ssh` — ephemeral in-memory SSH key injection |
+| 2 | Added `cry keygen` — secure random key generation |
+| 3 | Added `cry derive` — deterministic keys from passphrases |
+| 4 | Removed legacy `identity` command (replaced by `derive`) |
 | 5 | Standardized key file extensions (`.cry_id`, `.cry_pub_id`) |
-| 6 | Improved cross-platform SSH support (Linux + Windows) |
+| 6 | Improved cross-platform SSH support (Linux, macOS, Windows) |
+| 7 | HMAC sub-key now uses HKDF-Expand (RFC 5869) for auditability |
 
 ---
 
-
 ## Platform support
 
-| Platform | `encrypt` / `decrypt` | `identity` / `sign` / `verify` | `cry ssh` |
+| Platform | `encrypt` / `decrypt` | `sign` / `verify` | `cry ssh` |
 |---|---|---|---|
-| Linux | ✅ | ✅ | ✅ |
-| macOS | ✅ | ✅ | ✅ |
-| FreeBSD / OpenBSD / NetBSD | ✅ | ✅ | ✅ |
-| Windows (native) | ✅ | ✅ | ✅ |
-| WSL (Windows Subsystem for Linux) | ✅ | ✅ | ✅ |
+| Linux | ✅ | ✅ | ✅ via `ssh-agent` |
+| macOS | ✅ | ✅ | ✅ via `ssh-agent` |
+| FreeBSD / OpenBSD / NetBSD | ✅ | ✅ | ✅ via `ssh-agent` |
+| Windows (native) | ✅ | ✅ | ✅ via temp key file |
+| WSL | ✅ | ✅ | ✅ via `ssh-agent` |
 
-**Prerequisites for `cry ssh`:** `ssh` and `ssh-agent` must be on `PATH`. On most Linux distributions this means `openssh-client`. On macOS both are included in the OS.
+**Prerequisites for `cry ssh`:** `ssh` and `ssh-agent` must be on `PATH`. Most Linux distros need `openssh-client`. macOS includes both.
 
 ---
 
 ## Documentation
 
-- [Identity + SSH guide](docs/identity-and-ssh.md)
-- [Architecture & security deep dive](docs/architecture-and-security.md)
+- [Identity, derive, and SSH guide](docs/identity-and-ssh.md)
+- [Architecture and security deep dive](docs/architecture-and-security.md)
 - [Developer guide](docs/developer-guide.md)
+- [Repository review and roadmap](docs/repo-review.md)
+
+---
 
 ## Build
 
@@ -63,11 +76,13 @@ Ephemeral SSH key, Passphrase-protected, authenticated, streaming — handles fi
 cargo build --release
 ```
 
+The binary is placed at `target/release/cry`.
+
 ---
 
 ## Usage examples
 
-### Encrypt
+### Encrypt a file
 
 ```sh
 cry encrypt -p secret.txt -c secret.cry
@@ -76,11 +91,14 @@ cry encrypt -p secret.txt -c secret.cry
 Prompts for a passphrase (with confirmation). Algorithm defaults to AES-256-GCM.
 
 ```sh
+# Use ChaCha20-Poly1305 instead (preferred on devices without AES hardware)
 cry encrypt -p secret.txt -c secret.cry -a chacha20poly1305
-cry encrypt -p secret.txt -c secret.cry --force   # overwrite existing output
+
+# Overwrite an existing output file
+cry encrypt -p secret.txt -c secret.cry --force
 ```
 
-### Decrypt
+### Decrypt a file
 
 ```sh
 cry decrypt -c secret.cry -p recovered.txt
@@ -89,50 +107,61 @@ cry decrypt -c secret.cry -p recovered.txt
 The algorithm is read automatically from the file header — no `-a` flag needed.
 
 ```sh
-cry decrypt -c secret.cry -p recovered.txt --force  # overwrite existing output
+cry decrypt -c secret.cry -p recovered.txt --force
 ```
 
-### Passphrase from a file (non-interactive / CI)
+### Non-interactive passphrase (CI / automation)
 
 ```sh
 cry encrypt -p secret.txt -c secret.cry --pass-file /run/secrets/passphrase
 cry decrypt -c secret.cry -p out.txt    --pass-file /run/secrets/passphrase
 ```
 
-The first line of the file is used. Set permissions to `0600`.
+The first line of the file is used as the passphrase. Set file permissions to `0600`.  
+Do not pass passphrases via environment variables or command-line arguments — both are observable in process listings.
 
-### CryDNA
+---
+
+### Sign a file
 
 ```sh
-cry sign     -f report.pdf -n work            # sign a file
-cry verify   -f report.pdf -s <SIG> -k <PUB>  # verify a signature
+cry sign -f report.pdf -n work
 ```
 
-### SSH usage (ephemeral derived key)
+Prints the signature hex and the public key. Copy both somewhere safe.
 
-Connect to an SSH host using a deterministic Ed25519 key derived from your
-passphrase. The private key is never written to disk.
-
-**One-time server setup** — get the public key and add it to the server:
+### Verify a signature
 
 ```sh
-# to get authorized_keys and keys (only first time)
+cry verify -f report.pdf -s <SIGNATURE_HEX> -k <PUBLIC_KEY_HEX>
+```
+
+Returns exit code 0 on success, non-zero on failure. Safe to use in scripts.
+
+---
+
+### SSH with an ephemeral derived key
+
+`cry ssh` derives an Ed25519 identity from your passphrase and uses it for an SSH session without ever writing the private key to disk.
+
+**One-time setup — get your public key:**
+
+```sh
 cry derive --openssh
-
 ```
 
-Copy the printed `ssh-ed25519 ...` line to `~/.ssh/authorized_keys` on the server.
+Copy the printed `ssh-ed25519 ...` line into `~/.ssh/authorized_keys` on the server.
 
 **Connecting:**
 
 ```sh
-# Basic connection — prompts for passphrase
+# Basic — prompts for passphrase
 cry ssh user@host
 
 # Named namespace (must match what you added to authorized_keys)
 cry ssh user@host -n work
 
-# Key version rotation
+# Key version rotation (after you've rotated the key on the server)
 cry ssh user@host -n work --key-version 2
 
 # Sub-identity
@@ -149,84 +178,88 @@ cry ssh user@host -- -v -L 8080:localhost:8080 -A
 cry ssh user@host -- -o StrictHostKeyChecking=accept-new
 ```
 
-What happens under the hood:
+**What happens under the hood (Unix):**
 
-1. Argon2id derives a 32-byte seed from the passphrase (same as old `cry identity`).
+1. Argon2id derives a 32-byte seed from the passphrase (namespace + version + sub-id scoped).
 2. An Ed25519 keypair is produced from the seed.
-3. A fresh `ssh-agent` subprocess is spawned.
-4. The keypair is injected into the agent over a Unix socket (in-memory transfer).
-5. `ssh` is exec'd with `SSH_AUTH_SOCK` pointing at the ephemeral agent.
-6. When the session ends the agent is killed; its socket disappears.
+3. A fresh `ssh-agent` subprocess is spawned on a temporary Unix socket.
+4. The keypair is injected into the agent via stdin pipe (`ssh-add -`). It never touches the filesystem.
+5. `ssh` is run with `SSH_AUTH_SOCK` pointing to the ephemeral agent.
+6. When the session ends, the agent is killed and its socket disappears. Your existing SSH agent (if any) is completely unaffected.
 
-The passphrase is used only for Argon2id KDF — there is no second passphrase layer on the key itself.
+**What happens under the hood (Windows):**
 
-#### Identity recovery for SSH
-
-SSH keys derived by `cry ssh` are fully deterministic. To regenerate the same
-keypair on any machine, use the same passphrase, namespace, key version, and
-sub-id. If any value differs (including a typo), you get a different keypair.
-
-To rotate: increment `--key-version` and re-add the new public key to the
-server (`cry derive -n work --key-version 2 --ssh`).
+1–2 are the same. Then:
+3. The private key PEM is written to a restricted temp file in `%TEMP%`. ACLs are applied _before_ key data is written.
+4. `ssh -i <tempfile>` is run.
+5. On exit, the temp file is overwritten with zeros, flushed, and deleted.
 
 ---
 
-## Derive (CryDNA) — details
-
-See also [docs/identity-and-ssh.md](docs/identity-and-ssh.md) for a complete guide.
+### Keygen — random keys
 
 ```sh
-cry derive -n work --private-key-out ./work.id
-cry derive -n work --openssh --private-key-out ./work.id
-```
-
-This writes:
-- `./work.id` (raw CryDNA private key, lowercase hex)
-- `./work.id.openssh_id` (encrypted OpenSSH private key, when `--openssh` is used)
-
-Use `--force` to overwrite existing files.
-
-```sh
-cry sign -f release.tar.gz -n work
-cry verify -f release.tar.gz -s <SIGNATURE_HEX> -k <PUBLIC_KEY_HEX>
-```
-
-#### Why same passphrase can produce different keys
-
-CryDNA derives keys from this tuple:
-
-- passphrase
-- namespace (`--namespace`)
-- key version (`--key-version`)
-- sub-identity (`--sub-id`, optional)
-
-Using the same passphrase with `namespace=default` and `namespace=work` will
-produce different keys by design.
-
-### keygen examples (secure random keys)
-
-```sh
-# Random Ed25519 keypair -> k.cry_id + k.cry_pub_id
+# Random Ed25519 keypair → k.cry_id + k.cry_pub_id
 cry keygen --algo ed25519 -o k
 
-# Random AES-256 key -> aes.cry_id
+# Random AES-256-GCM key → aes.cry_id
 cry keygen --algo aes256gcm -o aes
 
-# Random RSA keypair
+# Random RSA keypair (defaults to 3072-bit)
+cry keygen --algo rsa -o server
+
+# Random RSA keypair with custom bit size
 cry keygen --algo rsa --bits 4096 -o server
 ```
 
-### derive examples (deterministic keys)
+### Derive — deterministic keys from a passphrase
 
 ```sh
 # Deterministic Ed25519 from prompted passphrase
 cry derive --algo ed25519 -n work -o work
 
-# Deterministic AES key from explicit passphrase
+# Deterministic AES key from an explicit passphrase (useful in scripts)
 cry derive --algo aes256gcm --passphrase 'correct horse battery staple' -n backup -o backup
 
 # Namespace + sub-id scoping
 cry derive --algo ed25519 -n prod --sub-id deploy -o deploy
+
+# Output encrypted OpenSSH private key format as well
+cry derive -n work --openssh --private-key-out ./work.id
+```
+
+The `--openssh` flag writes:
+- `./work.id` — raw CryDNA private key (lowercase hex, 0600 permissions)
+- `./work.id.openssh_id` — encrypted OpenSSH private key (for use with standard SSH tooling)
+- `./work.id.openssh_pub` — OpenSSH public key line
+
+Use `--force` to overwrite existing files.
+
+---
+
+## Deterministic key derivation — how it works
+
+CryDNA derives keys from this four-part tuple:
+
+| Input | CLI flag | Effect of changing |
+|---|---|---|
+| Passphrase | (prompted or `--pass-file`) | Completely different key family |
+| Namespace | `-n` / `--namespace` | Independent key per name |
+| Key version | `--key-version` | Rotate key without changing passphrase |
+| Sub-identity | `--sub-id` | Child key scoped under parent namespace |
+
+Same tuple → same key. Any change → completely different key. This is by design.
+
+### Key rotation
+
+Increment `--key-version` to rotate:
+
+```sh
+# Derive and publish the new public key
+cry derive -n work --key-version 2 --openssh
+
+# Update authorized_keys on the server, then connect with the new version
+cry ssh user@host -n work --key-version 2
 ```
 
 ---
@@ -241,25 +274,8 @@ cry derive
 cry sign
 cry verify
 cry ssh
+cry bench
 ```
-
----
-
-## Security notes
-
-### Deterministic vs random keys
-
-- Use **`derive`** when you need reproducibility across systems without copying private keys.
-- Use **`keygen`** when you want fresh independent random keys each time.
-- Deterministic keys are only as strong as passphrase entropy and context hygiene.
-
-### Passphrase strength is critical
-
-For deterministic derivation, weak passphrases reduce effective security regardless of algorithm choice. Prefer long, unique, high-entropy passphrases and avoid reuse across environments.
-
-### In-memory key advantages
-
-For SSH sessions, `cry` minimizes key persistence by using ephemeral key handling and short-lived auth context instead of long-term private key files. This reduces accidental leakage through backups, sync tools, or filesystem artifacts.
 
 ---
 
@@ -278,20 +294,40 @@ For SSH sessions, `cry` minimizes key persistence by using ephemeral key handlin
 ├──────────────────────────────────────────────────────────────┤
 │ Chunks  (repeated ChunkCount times)                          │
 │   Length       4 bytes  u32 big-endian                       │
-│   Data         N bytes  AEAD ciphertext + 16-byte tag        │
+│   Data         N bytes  AEAD ciphertext + 16-byte auth tag   │
 └──────────────────────────────────────────────────────────────┘
 ```
 
-Each chunk's AEAD call includes as **Additional Authenticated Data**:
+### Header HMAC
+
+The HMAC sub-key is derived from the master key using HKDF-Expand (RFC 5869):
 
 ```
-AAD = SHA-256(magic || algo || salt || nonce || chunk_count) || chunk_index
+sub-key = HKDF-Expand(PRK=master_key, info="cry-header-hmac-v2", L=32)
+hmac    = HMAC-SHA256(sub-key, magic || algo || salt || nonce || chunk_count)
 ```
 
-The **chunk nonce** is derived by treating the 12-byte base nonce as a 96-bit
-big-endian integer and adding the chunk index (with carry). This is the same
-counter construction used by TLS 1.3 and prevents nonce reuse across chunks
-regardless of the base nonce bit pattern.
+HKDF-Extract is skipped because the master key is already the output of Argon2id (uniformly distributed).
+
+### Per-chunk AAD
+
+Each chunk's AEAD call includes **Additional Authenticated Data**:
+
+```
+AAD = SHA-256(magic || algo || salt || nonce || chunk_count) || chunk_index_u64_be
+```
+
+This binds each chunk to its position in this specific file. Chunk reordering, substitution, cross-file splicing, and truncation are all detectable.
+
+### Chunk nonce derivation
+
+The 12-byte base nonce is treated as a 96-bit big-endian integer. The chunk nonce is:
+
+```
+chunk_nonce(index) = base_nonce + index   (96-bit add-with-carry)
+```
+
+This is the same counter construction used by TLS 1.3, and is robust against any base-nonce bit pattern (unlike XOR-based schemes which break on all-zeros).
 
 ---
 
@@ -304,8 +340,7 @@ regardless of the base nonce bit pattern.
 | Parallelism | 1      | Single-threaded, portable         |
 | Output      | 32 B   | 256-bit key for AES-256 / ChaCha  |
 
-The same parameters are used for file encryption KDF and CryDNA identity
-derivation, ensuring consistent cost for both operations.
+The same parameters are used for file encryption KDF and CryDNA identity derivation.
 
 ---
 
@@ -316,9 +351,9 @@ cry bench
 cry bench --size-mib 256 --samples 9 --warmup 2 --kdf-runs 7
 ```
 
-Prints local throughput estimates (MiB/s) for AES-256-GCM and
-ChaCha20-Poly1305 using warmup + repeated samples, then reports median and p95
-for encrypt/decrypt plus average Argon2id derivation time.
+Prints local throughput (MiB/s) for AES-256-GCM and ChaCha20-Poly1305, plus median, p95, and Argon2id derivation time.
+
+---
 
 ## Running tests
 
@@ -326,18 +361,42 @@ for encrypt/decrypt plus average Argon2id derivation time.
 cargo test
 ```
 
-Covers: round-trip (AES + ChaCha), multi-chunk, empty files, tamper detection,
-wrong-passphrase rejection, `--force`, overwrite guard, tmp-file cleanup,
-identity determinism, sign/verify round-trip, SSH agent protocol parser.
+Covers: round-trip (AES + ChaCha), multi-chunk, empty files, tamper detection, wrong-passphrase rejection, `--force`, overwrite guard, temp-file cleanup, identity determinism, sign/verify round-trip, and the SSH agent protocol parser.
 
 ---
 
 ## Adding a new algorithm
 
-1. Add a variant to `Algorithm` in `src/header.rs` with a `repr(u8)` value.
+1. Add a variant to `Algorithm` in `src/header.rs` with a unique `repr(u8)` value.
 2. Add the crate to `Cargo.toml`.
-3. Implement the `encrypt_chunk` / `decrypt_chunk` match arms in `src/cipher.rs`.
+3. Implement `encrypt_chunk` / `decrypt_chunk` match arms in `src/cipher.rs`.
 4. The CLI picks it up automatically via `clap`'s `ValueEnum` derive.
+
+---
+
+## Security notes
+
+### Deterministic vs random keys
+
+- Use **`derive`** when you need reproducibility across machines without copying private key files.
+- Use **`keygen`** when you want fresh, independent random keys each time.
+- Deterministic keys are only as strong as the passphrase entropy and the discipline of not reusing context tuples across environments.
+
+### Passphrase strength
+
+For deterministic derivation, weak passphrases reduce effective security regardless of algorithm. Prefer long, unique, high-entropy passphrases.
+
+### In-memory key handling
+
+`cry ssh` avoids writing SSH private keys to disk entirely on Unix. On Windows, the key is written to a restricted temp file with ACLs applied _before_ the key data is written, and the file is overwritten with zeros and deleted when the session ends.
+
+### Zeroize
+
+All key material (passphrase bytes, derived keys, seeds) uses `Zeroizing<T>` wrappers from the `zeroize` crate. These wipe memory on drop, reducing the risk of key material appearing in swap, crash dumps, or memory scanners after use.
+
+### Environment variable passphrase sources
+
+Passing secrets via environment variables (`MY_PASS=secret cry encrypt ...`) is intentionally not supported. Environment variables are observable in `/proc/<pid>/environ` on Linux, in `ps` output on some platforms, and by any process with the same UID. Use `--pass-file` with a `0600` file instead.
 
 ---
 
@@ -348,41 +407,42 @@ identity determinism, sign/verify round-trip, SSH agent protocol parser.
 - **Plaintext confidentiality** of file contents at rest and in transit as `.cry` blobs.
 - **Integrity and authenticity** of encrypted files (header + chunk stream).
 - **Passphrase-derived key secrecy** during runtime and after process exit.
-- **SSH private key secrecy** — the key lives only in a short-lived agent process and is never written to disk.
+- **SSH private key secrecy** — the key lives only in a short-lived agent process (Unix) or a restricted temp file (Windows) and is never written to long-term disk storage.
 
 ### Trust assumptions
 
 - The host OS, Rust toolchain, and CPU are not actively compromised.
 - Cryptographic primitives (AES-256-GCM, ChaCha20-Poly1305, HMAC-SHA256, Argon2id, SHA-256, Ed25519) behave as designed.
-- Users choose sufficiently strong passphrases or use high-entropy secrets via `--pass-file`.
+- Users choose sufficiently strong passphrases, or use high-entropy secrets via `--pass-file`.
 - The `ssh-agent` binary is the genuine OpenSSH implementation from the OS package manager.
 
 ### In scope
 
 - Reading encrypted `.cry` files without the passphrase.
-- Offline brute-force attempts against captured ciphertext.
+- Offline brute-force attacks against captured ciphertext.
 - File tampering: modifying header bytes, chunk lengths, chunk ciphertext/tag, reordering/removing chunks, or truncation.
 - Nonce-misuse from chunking logic.
 - Accidental destructive overwrite of output files.
-- SSH private key exposure via disk writes.
+- SSH private key exposure via disk writes (Unix).
 
 ### Out of scope / not guaranteed
 
-- Compromised endpoint security (malware, keyloggers, root/admin attackers, memory scraping while process runs).
+- Compromised endpoint security (malware, keyloggers, root/admin attackers, memory scraping while the process runs).
 - Passphrase theft from unsafe user practices.
 - Metadata privacy: file names, paths, sizes, timestamps, and access patterns are not hidden.
 - Plausible deniability or hidden-volume semantics.
 - Secure deletion of source plaintext or filesystem/journal remnants.
-- Side-channel resistance beyond what underlying libraries/platform provide.
-- Multi-user policy controls, remote KMS/HSM integration, or enterprise key lifecycle governance.
+- Side-channel resistance beyond what the underlying libraries and platform provide.
+- Multi-user policy controls, remote KMS/HSM integration, or enterprise key lifecycle management.
 - Protection against a malicious `ssh-agent` binary or a compromised `SSH_AUTH_SOCK` socket.
+- Cryptographic erasure of the SSH private key temp file on Windows (NTFS journaling and SSD wear-leveling limit physical-media guarantees).
 
-### Security notes
+### Security properties that hold
 
-- Passphrases are read with `rpassword` (no terminal echo).
+- Passphrases are read with `rpassword` (no terminal echo, no history).
 - All key material uses `Zeroizing<T>` — wiped from memory on drop.
-- The file header is not encrypted, but it is HMAC-authenticated.
-- Decryption fails loudly on wrong passphrase, corruption, truncation, or tampering.
+- The file header is not encrypted, but it is HMAC-authenticated. Any bit-flip in the header is detectable before chunk decryption begins.
+- Decryption fails loudly on wrong passphrase, corruption, truncation, or tampering. There is no "best effort" partial output.
 - Environment variables are intentionally not supported as a passphrase source.
-- `cry ssh` injects keys into an isolated, ephemeral `ssh-agent` subprocess. The agent only lives for the SSH session and is killed on exit. Your persistent SSH agent (if any) is unaffected.
-- Keep backups — there is no key recovery mechanism.
+- On Unix, `cry ssh` injects keys into an isolated, ephemeral `ssh-agent` subprocess. The agent only lives for the SSH session and is killed on exit. Your persistent SSH agent (if any) is completely unaffected.
+- Keep backups — there is no key recovery mechanism. If you lose your passphrase (for derive) or your key file (for keygen), the encrypted data is unrecoverable.
