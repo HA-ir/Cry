@@ -164,20 +164,25 @@ impl Identity {
     /// separate from the CryDNA master passphrase used to deterministically
     /// derive this identity.
     ///
-    /// Returns a UTF-8 PEM string suitable for writing directly to disk.
-    /// The internal encoder returns a zeroizing string wrapper; we convert
-    /// to a plain `String` at this boundary to match the public API.
-    pub fn openssh_private_key(&self, passphrase: &str, comment: &str) -> Result<String, CryError> {
+    /// Returns a `Zeroizing<String>` so the encrypted PEM bytes are wiped
+    /// from heap memory when the value is dropped. Even the encrypted form
+    /// of a private key is sensitive and must not outlive its use.
+    pub fn openssh_private_key(
+        &self,
+        passphrase: &str,
+        comment: &str,
+    ) -> Result<Zeroizing<String>, CryError> {
         let keypair = Ed25519Keypair::from_bytes(&self.signing_key.to_keypair_bytes())
             .map_err(|e| CryError::InvalidFormat(format!("OpenSSH key build failed: {e}")))?;
         let private = PrivateKey::new(KeypairData::Ed25519(keypair), comment)
             .map_err(|e| CryError::InvalidFormat(format!("OpenSSH key build failed: {e}")))?;
         let mut rng = rand::thread_rng();
+        // `to_openssh` already returns `Zeroizing<String>`; we preserve that
+        // wrapper all the way to the caller instead of copying into a plain String.
         private
             .encrypt(&mut rng, passphrase)
             .map_err(|e| CryError::InvalidFormat(format!("OpenSSH key encryption failed: {e}")))?
             .to_openssh(LineEnding::LF)
-            .map(|pem| pem.to_string())
             .map_err(|e| CryError::InvalidFormat(format!("OpenSSH key encode failed: {e}")))
     }
 
@@ -410,7 +415,7 @@ pub struct VerifyArgs {
     #[arg(short = 's', long = "signature", value_name = "HEX")]
     pub signature: String,
 
-    /// Public key to verify against (hex, as printed by `cry derive`)
+    /// Public key to verify against (hex, as printed by `cry identity`)
     #[arg(short = 'k', long = "public-key", value_name = "HEX")]
     pub public_key: String,
 }

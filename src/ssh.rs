@@ -16,8 +16,11 @@
 //! with restricted permissions (owner-only), pass it to `ssh -i`, then
 //! securely wipe and delete the file on exit.
 //!
-//! The temp file is placed in `%TEMP%` with a random suffix and is removed
-//! in all exit paths (normal, error, and panic via a RAII guard).
+//! The temp file is placed in `%TEMP%` with a random suffix. Permissions
+//! are restricted with icacls **before** the key data is written, so there
+//! is no window during which the file is readable by other local processes.
+//! The file is removed in all exit paths (normal, error, and panic via
+//! a RAII guard).
 
 use std::io::Write as IoWrite;
 use std::process::Command;
@@ -128,7 +131,7 @@ fn encode_openssh_private_key(
         .map_err(|e| CryError::InvalidFormat(format!("OpenSSH key build failed: {e}")))?;
     let private = PrivateKey::new(KeypairData::Ed25519(keypair), comment)
         .map_err(|e| CryError::InvalidFormat(format!("OpenSSH key build failed: {e}")))?;
-    // Unencrypted — no passphrase.
+    // Unencrypted — no passphrase. `to_openssh` returns `Zeroizing<String>` directly.
     private
         .to_openssh(LineEnding::LF)
         .map_err(|e| CryError::InvalidFormat(format!("OpenSSH key encode failed: {e}")))
@@ -314,39 +317,72 @@ struct TempKeyFile {
 #[cfg(windows)]
 impl TempKeyFile {
     /// Write `key_pem` to a temp file with owner-only ACL.
+    ///
+    /// Security ordering:
+    /// 1. Create the file **empty**.
+    /// 2. Apply restrictive ACL with icacls while the file contains no key data,
+    ///    eliminating the race window that existed when ACL was applied after write.
+    /// 3. Write the key material only after the ACL is in place.
+    ///
+    /// The username is obtained from the `whoami` command rather than the
+    /// `USERNAME` environment variable, which can be forged by any code running
+    /// in the same process or by a malicious parent that set env before spawning.
     fn create(key_pem: &Zeroizing<String>) -> Result<Self, CryError> {
         use std::fs::OpenOptions;
 
-        // Build a path like %TEMP%\cry_<hex>.pem
+        // Build a path like %TEMP%\cry_<hex>.pem. On modern Windows, %TEMP%
+        // resolves to a per-user directory (C:\Users\<user>\AppData\Local\Temp),
+        // which already limits access, but we enforce explicit ACLs below.
         let mut rng_bytes = [0u8; 8];
         rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut rng_bytes);
         let suffix = crate::crydna::bytes_to_hex(&rng_bytes);
-
         let path = std::env::temp_dir().join(format!("cry_{suffix}.pem"));
 
-        // Write the file.
-        let mut file = OpenOptions::new()
+        // Step 1: Create the empty file. No key data is present yet.
+        OpenOptions::new()
             .write(true)
             .create_new(true)
             .open(&path)
             .map_err(CryError::Io)?;
 
-        file.write_all(key_pem.as_bytes()).map_err(CryError::Io)?;
-        file.flush().map_err(CryError::Io)?;
-        drop(file);
-
-        // Restrict permissions to owner-only using icacls.
-        // This mimics the Unix 0600 behavior.
-        let _ = Command::new("icacls")
+        // Step 2: Lock down the ACL before any key bytes are written.
+        // Use `whoami` to obtain the canonical DOMAIN\user identity.
+        // Reading USERNAME from the environment is unsafe: any code in the
+        // process (or a parent) can forge it, causing the ACL grant to target
+        // a wrong account and leaving the file world-readable.
+        let username = whoami_windows();
+        let acl_ok = Command::new("icacls")
             .args([
                 path.to_str().unwrap_or(""),
-                "/inheritance:r",
-                "/grant:r",
-                &format!("{}:F", whoami_windows()),
+                "/inheritance:r",       // remove inherited ACEs
+                "/grant:r",             // replace (not append) explicit grant
+                &format!("{username}:F"), // full control for current user only
             ])
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
-            .status();
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+
+        if !acl_ok {
+            // Clean up the empty file and abort — better to fail than to
+            // write key material into a world-readable file.
+            let _ = std::fs::remove_file(&path);
+            return Err(CryError::InvalidFormat(
+                "Failed to restrict temp key file permissions with icacls; \
+                 refusing to write key material to an unsecured file."
+                    .into(),
+            ));
+        }
+
+        // Step 3: Now that the ACL is in place, write the key data.
+        let mut file = OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .map_err(CryError::Io)?;
+        file.write_all(key_pem.as_bytes()).map_err(CryError::Io)?;
+        file.flush().map_err(CryError::Io)?;
+        drop(file);
 
         Ok(Self { path })
     }
@@ -359,19 +395,40 @@ impl TempKeyFile {
 #[cfg(windows)]
 impl Drop for TempKeyFile {
     fn drop(&mut self) {
-        // Overwrite file content with zeros before deleting (best-effort).
+        // Best-effort logical overwrite: write zeros, sync to OS, then delete.
+        //
+        // Limitations: NTFS journaling, SSD wear-leveling, and OS page caching
+        // mean this cannot guarantee cryptographic erasure of physical media.
+        // It does clear the logical file content, reducing recovery risk from
+        // naive forensic tools and ensuring the data is not trivially accessible
+        // after the session ends.
         if let Ok(meta) = std::fs::metadata(&self.path) {
-            let zeros = vec![0u8; meta.len() as usize];
-            let _ = std::fs::write(&self.path, &zeros);
+            if let Ok(mut file) = std::fs::OpenOptions::new().write(true).open(&self.path) {
+                let zeros = vec![0u8; meta.len() as usize];
+                let _ = file.write_all(&zeros);
+                // Flush to the OS buffer and request a write-through to storage.
+                let _ = file.sync_all();
+            }
         }
         let _ = std::fs::remove_file(&self.path);
     }
 }
 
-/// Get the current Windows username for icacls.
+/// Get the current Windows user identity for icacls in `DOMAIN\user` form.
+///
+/// Uses the `whoami` command rather than the `USERNAME` environment variable.
+/// Environment variables can be forged by any code that runs in the same
+/// process or by a parent process before spawning — using them to set an ACL
+/// could grant the wrong account full control over the key file.
 #[cfg(windows)]
 fn whoami_windows() -> String {
-    std::env::var("USERNAME").unwrap_or_else(|_| "BUILTIN\\Users".to_string())
+    Command::new("whoami")
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "BUILTIN\\Users".to_string())
 }
 
 // ---------------------------------------------------------------------------

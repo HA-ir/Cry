@@ -248,7 +248,10 @@ fn write_openssh_private_key(
     ensure_writable(path, force)?;
     let passphrase_str = std::str::from_utf8(passphrase)
         .map_err(|_| CryError::InvalidFormat("OpenSSH passphrase must be valid UTF-8".into()))?;
+    // openssh_private_key now returns Zeroizing<String>; use .as_bytes() so
+    // the zeroized wrapper is held for the full duration of the write and
+    // wiped from heap memory immediately after — not copied into a plain String.
     let pem = identity.openssh_private_key(passphrase_str, comment)?;
-    std::fs::write(path, pem)?;
+    std::fs::write(path, pem.as_bytes())?;
     Ok(())
 }
