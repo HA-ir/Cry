@@ -291,8 +291,8 @@ fn main() {
 
             let result: Result<(), CryError> = (|| {
                 let content = std::fs::read(&args.file).map_err(CryError::Io)?;
-                let valid =
-                    crydna::verify_content_signature(&args.public_key, &content, &args.signature)?;
+                crydna::verify_content_signature(&args.public_key, &content, &args.signature)?;
+
 
                 kv("File", &args.file.display().to_string());
                 kv("Public key", &args.public_key);
@@ -306,18 +306,8 @@ fn main() {
                 );
                 divider();
 
-                if valid {
-                    eprintln!(
-                        "  \x1b[32m✔\x1b[0m  Signature is \x1b[1mVALID\x1b[0m — file is authentic and untampered."
-                    );
-                    Ok(())
-                } else {
-                    Err(CryError::VerificationFailed(
-                        "Signature does not match — file may have been tampered with, \
-                         or the wrong public key was supplied."
-                            .into(),
-                    ))
-                }
+                eprintln!("  \x1b[32m✔\x1b[0m  Signature is \x1b[1mVALID\x1b[0m — file is authentic and untampered.");
+                Ok(())
             })();
 
             result
@@ -586,7 +576,7 @@ mod integration {
         let sig_hex = Identity::signature_hex(&sig);
 
         assert!(
-            crydna::verify_content_signature(&pub_hex, content, &sig_hex).unwrap(),
+            crydna::verify_content_signature(&pub_hex, content, &sig_hex).is_ok(),
             "full sign-verify roundtrip must succeed"
         );
     }

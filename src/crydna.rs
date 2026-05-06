@@ -248,7 +248,7 @@ pub fn verify_content_signature(
     public_key_hex: &str,
     content: &[u8],
     signature_hex: &str,
-) -> Result<bool, CryError> {
+) -> Result<(), CryError> {
     // Parse public key
     let pub_bytes = hex_to_bytes(public_key_hex)
         .map_err(|e| CryError::InvalidFormat(format!("Invalid public key hex: {e}")))?;
@@ -273,7 +273,15 @@ pub fn verify_content_signature(
     h.update(&content_hash);
     let msg_hash = h.finalize();
 
-    Ok(verifying_key.verify(&msg_hash, &signature).is_ok())
+    verifying_key
+        .verify(&msg_hash, &signature)
+        .map_err(|_| {
+            CryError::VerificationFailed(
+                "Signature is invalid — file may have been tampered with, \
+                 or the wrong public key was supplied."
+                    .into(),
+            )
+        })
 }
 
 // ---------------------------------------------------------------------------
@@ -498,7 +506,7 @@ mod tests {
         let sig_hex = Identity::signature_hex(&sig);
 
         assert!(
-            verify_content_signature(&pub_hex, content, &sig_hex).unwrap(),
+            verify_content_signature(&pub_hex, content, &sig_hex).is_ok(),
             "valid signature should verify"
         );
     }
@@ -512,7 +520,7 @@ mod tests {
         let sig_hex = Identity::signature_hex(&sig);
 
         assert!(
-            !verify_content_signature(&pub_hex, b"Tampered content", &sig_hex).unwrap(),
+            verify_content_signature(&pub_hex, b"Tampered content", &sig_hex).is_err(),
             "tampered content must fail verification"
         );
     }
@@ -526,7 +534,7 @@ mod tests {
         let sig_hex = Identity::signature_hex(&sig);
 
         assert!(
-            !verify_content_signature(&id_b.public_key_hex(), content, &sig_hex).unwrap(),
+            verify_content_signature(&id_b.public_key_hex(), content, &sig_hex).is_err(),
             "signature from alice should not verify with bob's key"
         );
     }

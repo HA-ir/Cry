@@ -150,9 +150,6 @@ fn run_ssh_unix(args: SshArgs, key_pem: &Zeroizing<String>) -> Result<(), CryErr
     // Build the ssh command.
     let mut ssh = Command::new("ssh");
     ssh.env("SSH_AUTH_SOCK", &agent.socket);
-    if let Some(pid) = &agent.pid {
-        ssh.env("SSH_AGENT_PID", pid);
-    }
 
     // Point ssh at our ephemeral agent only. We do NOT pass -F /dev/null
     // because that suppresses known_hosts and other useful config.
