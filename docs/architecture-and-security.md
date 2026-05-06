@@ -4,13 +4,14 @@ This document explains how `cry` is structured internally, why key design choice
 
 ## High-level module map
 
-- `src/main.rs` — CLI surface (`encrypt`, `decrypt`, `identity`, `sign`, `verify`, `bench`) and passphrase input.
-- `src/cipher.rs` — streaming file encryption/decryption, chunk framing, AEAD operations, atomic output writing.
-- `src/header.rs` — `.cry` header format definitions, serialization/deserialization, algorithm enum.
+- `src/main.rs` — CLI surface (`encrypt`, `decrypt`, `keygen`, `derive`, `sign`, `verify`, `bench`, `ssh`) and passphrase input.
+- `src/cipher.rs` — streaming file encryption/decryption and authenticated chunk framing.
+- `src/header.rs` — `.cry` header format and algorithm enum.
 - `src/kdf.rs` — Argon2id key derivation and sub-key derivation.
-- `src/crydna.rs` — deterministic Ed25519 identity derivation, signing/verification, SSH/OpenSSH conversions.
-- `src/error.rs` — strongly typed error model and user-facing messages.
-- `src/bench.rs` — local benchmark runner for encrypt/decrypt/KDF timings.
+- `src/keygen.rs` — random key generation + deterministic derive workflow outputs.
+- `src/crydna.rs` — deterministic Ed25519 identity and signing/verification.
+- `src/ssh.rs` — ephemeral SSH key flow and platform-specific execution.
+- `src/error.rs` — typed error model.
 
 ## Encrypt/decrypt data flow
 
@@ -69,6 +70,19 @@ The chunk nonce is not random-per-chunk and not XOR-derived. Instead, `cry` trea
 - Add tests that intentionally violate assumptions (truncation, corrupted lengths, wrong passphrase, wrong key).
 - Document security implications in `README.md` + this doc.
 
+## v0.6 security focus
+
+- deterministic key workflows via `derive`
+- random key workflows via `keygen`
+- ephemeral SSH private key handling in `ssh`
+- standardized key filename extensions: `.cry_id`, `.cry_pub_id`
+
+## Operational security notes
+
+- Deterministic keys depend on passphrase strength and context consistency.
+- Random keys are preferred when reproducibility is not required.
+- Private key material is zeroized where possible and should not be logged.
+- SSH flow is designed to minimize disk persistence and avoid stale key artifacts.
 ## Suggested roadmap (pragmatic)
 
 - Add a detached metadata inspection command (`cry inspect`) that prints non-secret authenticated header fields.

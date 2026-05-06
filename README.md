@@ -1,26 +1,41 @@
 # cry 🔐  v0.5.0
 
 A fast, minimal CLI cryptography tool written in Rust.  
-Passphrase-protected, authenticated, streaming — handles files of any size.
+Ephemeral SSH key, Passphrase-protected, authenticated, streaming — handles files of any size.
 
 ---
 
-## What's new in v0.5
+`cry` now combines:
+- authenticated file encryption/decryption,
+- deterministic key derivation from passphrases,
+- secure random key generation,
+- and ephemeral SSH key usage with no-disk private key flow.
+
+---
+
+## Project description
+
+`cry` is designed for security-focused CLI workflows where reproducibility and low key exposure matter:
+
+- **Deterministic key derivation**: derive the same key material from the same passphrase + context tuple (namespace, key version, sub-id).
+- **Ephemeral SSH keys**: `cry ssh` derives an Ed25519 identity, injects it into a short-lived SSH auth path, and uses it for the session.
+- **No-disk key usage**: private key material for SSH sessions is handled in memory and lifecycle-managed to minimize persistence risk.
+
+---
+
+## What's new in v0.6
 
 | # | Change |
 |---|--------|
-| 1 | **Unified `Algorithm` enum** — `AlgoId` and `Algorithm` merged into one `repr(u8)` + `clap::ValueEnum` type; no more silent `From` conversion between two parallel enums |
-| 2 | **Counter nonce** — per-chunk nonce uses the standard 96-bit big-endian add-with-carry construction (same as TLS 1.3), replacing the fragile XOR scheme |
-| 3 | **`EncryptionFailed` error** — `encrypt_chunk` no longer incorrectly returns `DecryptionFailed` on AEAD encrypt errors |
-| 4 | **`--force` on encrypt/decrypt** — both commands now refuse to silently overwrite an existing output file unless `--force` is passed |
-| 5 | **Correct empty-file handling** — `chunk_count` is now `0` for empty files (was `max(1, 0) = 1`), eliminating a spurious truncation warning on decrypt |
-| 6 | **`--pass-env` removed** — environment variables are visible in `/proc`, `ps`, and child processes; removed to avoid giving users a false sense of security |
-| 7 | **Progress reporting** — multi-chunk files print `chunk N/M` to stderr during encrypt/decrypt |
-| 8 | **Integration tests** — file-based tests cover round-trip (AES + ChaCha), empty files, `--force`, overwrite guard, wrong-passphrase cleanup, and tmp-file removal on failure |
-| 9 | **OpenSSH export polish** — CryDNA OpenSSH private key export now documents passphrase behavior and returns the PEM as a plain `String` for simpler downstream handling |
-| 10 | **`cry ssh`** — connect to SSH hosts using a passphrase-derived Ed25519 keypair; the private key is injected into a short-lived agent subprocess and never written to disk (Unix only) |
+| 1 | Added `cry ssh` with ephemeral in-memory SSH keys |
+| 2 | Introduced `keygen` for secure random key generation |
+| 3 | Introduced `derive` for deterministic keys from passphrases |
+| 4 | Removed legacy `identity` command |
+| 5 | Standardized key file extensions (`.cry_id`, `.cry_pub_id`) |
+| 6 | Improved cross-platform SSH support (Linux + Windows) |
 
 ---
+
 
 ## Platform support
 
@@ -29,10 +44,8 @@ Passphrase-protected, authenticated, streaming — handles files of any size.
 | Linux | ✅ | ✅ | ✅ |
 | macOS | ✅ | ✅ | ✅ |
 | FreeBSD / OpenBSD / NetBSD | ✅ | ✅ | ✅ |
-| Windows (native) | ✅ | ✅ | ❌ (Unix agent protocol not available) |
+| Windows (native) | ✅ | ✅ | ✅ |
 | WSL (Windows Subsystem for Linux) | ✅ | ✅ | ✅ |
-
-`cry ssh` depends on Unix-domain sockets (`UnixStream`) and the `ssh-agent` binary. It is gated behind `#[cfg(unix)]` and is entirely absent from Windows builds — no stub, no runtime error. All other subcommands compile and run on Windows unchanged.
 
 **Prerequisites for `cry ssh`:** `ssh` and `ssh-agent` must be on `PATH`. On most Linux distributions this means `openssh-client`. On macOS both are included in the OS.
 
@@ -52,7 +65,7 @@ cargo build --release
 
 ---
 
-## Usage
+## Usage examples
 
 ### Encrypt
 
@@ -88,29 +101,14 @@ cry decrypt -c secret.cry -p out.txt    --pass-file /run/secrets/passphrase
 
 The first line of the file is used. Set permissions to `0600`.
 
-### Identity (CryDNA)
+### CryDNA
 
 ```sh
-cry identity
-cry identity -n work --ssh
-cry identity -n work --openssh
-cry identity -n work --openssh --private-key-out ~/.ssh/id_ed25519_crydna
-cry identity -n work --key-version 2
-cry identity -n work --sub-id deploy
-cry identity -n work --show-private-key
+cry sign     -f report.pdf -n work            # sign a file
+cry verify   -f report.pdf -s <SIG> -k <PUB>  # verify a signature
 ```
 
-By default, `cry identity` does **not** print your private key. It shows public
-information (public key + fingerprint), while the private key stays in memory
-for the current process and is wiped on drop.
-
-If you explicitly need to export it, pass:
-
-```sh
-cry identity --show-private-key
-```
-
-### SSH (Unix only)
+### SSH usage (ephemeral derived key)
 
 Connect to an SSH host using a deterministic Ed25519 key derived from your
 passphrase. The private key is never written to disk.
@@ -118,11 +116,9 @@ passphrase. The private key is never written to disk.
 **One-time server setup** — get the public key and add it to the server:
 
 ```sh
-# Print the authorized_keys line for the default namespace
-cry identity --ssh
+# to get authorized_keys and keys (only first time)
+cry derive --openssh
 
-# Print the authorized_keys line for a named namespace
-cry identity -n work --ssh
 ```
 
 Copy the printed `ssh-ed25519 ...` line to `~/.ssh/authorized_keys` on the server.
@@ -142,7 +138,7 @@ cry ssh user@host -n work --key-version 2
 # Sub-identity
 cry ssh user@host -n work --sub-id deploy
 
-# Non-interactive (CI)
+# Non-interactive passphrase file (CI)
 cry ssh user@host --pass-file /run/secrets/passphrase
 
 # Custom port
@@ -171,17 +167,17 @@ keypair on any machine, use the same passphrase, namespace, key version, and
 sub-id. If any value differs (including a typo), you get a different keypair.
 
 To rotate: increment `--key-version` and re-add the new public key to the
-server (`cry identity -n work --key-version 2 --ssh`).
+server (`cry derive -n work --key-version 2 --ssh`).
 
 ---
 
-## Identity (CryDNA) — details
+## Derive (CryDNA) — details
 
 See also [docs/identity-and-ssh.md](docs/identity-and-ssh.md) for a complete guide.
 
 ```sh
-cry identity -n work --private-key-out ./work.id
-cry identity -n work --openssh --private-key-out ./work.id
+cry derive -n work --private-key-out ./work.id
+cry derive -n work --openssh --private-key-out ./work.id
 ```
 
 This writes:
@@ -207,6 +203,32 @@ CryDNA derives keys from this tuple:
 Using the same passphrase with `namespace=default` and `namespace=work` will
 produce different keys by design.
 
+### keygen examples (secure random keys)
+
+```sh
+# Random Ed25519 keypair -> k.cry_id + k.cry_pub_id
+cry keygen --algo ed25519 -o k
+
+# Random AES-256 key -> aes.cry_id
+cry keygen --algo aes256gcm -o aes
+
+# Random RSA keypair
+cry keygen --algo rsa --bits 4096 -o server
+```
+
+### derive examples (deterministic keys)
+
+```sh
+# Deterministic Ed25519 from prompted passphrase
+cry derive --algo ed25519 -n work -o work
+
+# Deterministic AES key from explicit passphrase
+cry derive --algo aes256gcm --passphrase 'correct horse battery staple' -n backup -o backup
+
+# Namespace + sub-id scoping
+cry derive --algo ed25519 -n prod --sub-id deploy -o deploy
+```
+
 ---
 
 ## All command aliases
@@ -214,9 +236,30 @@ produce different keys by design.
 ```sh
 cry encrypt / en / -en
 cry decrypt / de / -de
-cry identity / id / -id
-cry ssh                         # Unix only
+cry keygen
+cry derive
+cry sign
+cry verify
+cry ssh
 ```
+
+---
+
+## Security notes
+
+### Deterministic vs random keys
+
+- Use **`derive`** when you need reproducibility across systems without copying private keys.
+- Use **`keygen`** when you want fresh independent random keys each time.
+- Deterministic keys are only as strong as passphrase entropy and context hygiene.
+
+### Passphrase strength is critical
+
+For deterministic derivation, weak passphrases reduce effective security regardless of algorithm choice. Prefer long, unique, high-entropy passphrases and avoid reuse across environments.
+
+### In-memory key advantages
+
+For SSH sessions, `cry` minimizes key persistence by using ephemeral key handling and short-lived auth context instead of long-term private key files. This reduces accidental leakage through backups, sync tools, or filesystem artifacts.
 
 ---
 

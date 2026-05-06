@@ -39,6 +39,16 @@ Run one test:
 cargo test wrong_passphrase_rejected -- --nocapture
 ```
 
+### Primary commands to validate
+
+```bash
+cargo run -- encrypt -p ./plain.txt -c ./plain.cry
+cargo run -- decrypt -c ./plain.cry -p ./recovered.txt
+cargo run -- keygen --algo ed25519 -o demo
+cargo run -- derive --algo ed25519 -n work -o work
+cargo run -- ssh user@host -- -V
+```
+
 ## Contributor checklist
 
 Before opening a PR:
@@ -48,6 +58,7 @@ Before opening a PR:
 3. `cargo test`
 4. Verify README/docs examples still match CLI output.
 5. If format logic changed, include migration/backward-compatibility notes.
+6. confirm release/version references are updated to `v0.6.0`
 
 ## Code conventions
 
