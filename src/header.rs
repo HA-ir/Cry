@@ -14,9 +14,10 @@
 //!   Total: 73 bytes
 //! ```
 //!
-//! The HMAC key is derived from the passphrase-derived key via a domain
-//! separation constant, so header authentication is tied to the key.
-//! An attacker who cannot guess the passphrase cannot forge a valid header.
+//! The HMAC key is derived from the master key using HKDF-Expand (RFC 5869)
+//! with a domain-separation info string. This replaces the earlier custom
+//! SHA-256(domain || key) construction and makes sub-key derivation auditable
+//! against a well-known standard primitive.
 //!
 //! `ChunkCount` closes the truncation attack: the receiver checks that the
 //! number of decrypted chunks matches the value committed in the header.
@@ -35,15 +36,12 @@ pub const HMAC_LEN: usize = 32;
 /// 4 (magic) + 1 (algo) + 16 (salt) + 12 (nonce) + 8 (chunk_count) + 32 (hmac)
 pub const HEADER_LEN: usize = 4 + 1 + SALT_LEN + NONCE_LEN + 8 + HMAC_LEN;
 
-/// Domain-separation prefix used when deriving the header-HMAC sub-key.
-const HMAC_DOMAIN: &[u8] = b"cry-header-hmac-v2";
+/// HKDF info tag for domain-separating the header-HMAC sub-key.
+/// Changing this string is a breaking format change.
+const HMAC_INFO: &[u8] = b"cry-header-hmac-v2";
 
 // ---------------------------------------------------------------------------
 // Algorithm identifier — single enum used for both CLI and wire format.
-//
-// Derives both `clap::ValueEnum` (for --algorithm flag) and is `repr(u8)`
-// so it can be written directly to the file header. A single enum here
-// replaces the previous two-enum design and its From conversion.
 // ---------------------------------------------------------------------------
 
 /// Encryption algorithm — controls both the CLI `--algorithm` flag and
@@ -108,15 +106,31 @@ impl Header {
         buf
     }
 
-    /// Compute HMAC-SHA256 over the pre-HMAC header bytes using a
-    /// domain-separated sub-key derived from `key`.
-    fn compute_hmac(pre_hmac: &[u8], key: &[u8; 32]) -> [u8; HMAC_LEN] {
-        use sha2::{Digest, Sha256};
-        let mut h = Sha256::new();
-        h.update(HMAC_DOMAIN);
-        h.update(key);
-        let sub_key: [u8; 32] = h.finalize().into();
+    /// Derive the 32-byte HMAC sub-key from `master_key` using HKDF-Expand
+    /// (RFC 5869, §2.3) with SHA-256 and the `HMAC_INFO` domain tag.
+    ///
+    /// HKDF-Expand treats the master key as the PRK (pseudo-random key) and
+    /// produces a fresh, domain-separated key for header authentication.
+    /// This is a standard construction and straightforward to audit.
+    ///
+    /// Note: we skip HKDF-Extract because the master key is already the output
+    /// of Argon2id (a strong KDF), so it is already uniformly distributed.
+    fn derive_hmac_subkey(master_key: &[u8; 32]) -> [u8; 32] {
+        // HKDF-Expand(PRK=master_key, info=HMAC_INFO, L=32)
+        //
+        // For a single output block (L ≤ 32), the expand step is:
+        //   T(1) = HMAC-SHA256(PRK, "" || info || 0x01)
+        let mut mac =
+            HmacSha256::new_from_slice(master_key).expect("HMAC-SHA256 accepts any key size");
+        mac.update(HMAC_INFO);
+        mac.update(&[0x01u8]); // block counter for first (and only) output block
+        mac.finalize().into_bytes().into()
+    }
 
+    /// Compute HMAC-SHA256 over `pre_hmac` bytes, keyed by a sub-key derived
+    /// from `master_key` via HKDF-Expand.
+    fn compute_hmac(pre_hmac: &[u8], master_key: &[u8; 32]) -> [u8; HMAC_LEN] {
+        let sub_key = Self::derive_hmac_subkey(master_key);
         let mut mac =
             HmacSha256::new_from_slice(&sub_key).expect("HMAC-SHA256 accepts any key size");
         mac.update(pre_hmac);
@@ -172,7 +186,7 @@ impl Header {
         r.read_exact(&mut stored_hmac)
             .map_err(|_| CryError::InvalidFormat("Failed to read header HMAC".into()))?;
 
-        // Re-compute and verify the HMAC in constant time.
+        // Re-derive the sub-key and verify in constant time.
         let header = Header {
             algo,
             salt,
@@ -180,12 +194,7 @@ impl Header {
             chunk_count,
         };
         let pre_hmac = header.pre_hmac_bytes();
-
-        use sha2::{Digest, Sha256};
-        let mut h = Sha256::new();
-        h.update(HMAC_DOMAIN);
-        h.update(key);
-        let sub_key: [u8; 32] = h.finalize().into();
+        let sub_key = Self::derive_hmac_subkey(key);
 
         let mut mac =
             HmacSha256::new_from_slice(&sub_key).expect("HMAC-SHA256 accepts any key size");

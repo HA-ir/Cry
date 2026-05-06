@@ -48,6 +48,12 @@ pub struct DeriveArgs {
     pub passphrase: Option<String>,
     #[arg(short = 'n', long = "namespace", default_value = "default")]
     pub namespace: String,
+    /// Key version for rotation — increment to derive a new key within the
+    /// same namespace without changing the passphrase.
+    /// Must match the version used when the public key was registered
+    /// (e.g. in authorized_keys or with `cry ssh --key-version N`).
+    #[arg(long = "key-version", default_value_t = 0, value_name = "N")]
+    pub key_version: u32,
     #[arg(short = 'o', long = "output", default_value = "k")]
     pub output: PathBuf,
     #[arg(long = "sub-id")]
@@ -147,7 +153,13 @@ pub fn derive(
                 ensure_writable(&openssh_path(&output.0), args.force)?;
                 ensure_writable(&openssh_pub_path(&output.0), args.force)?;
             }
-            let id = Identity::derive(passphrase, &args.namespace, 0, args.sub_id.as_deref())?;
+            // FIX 1: pass args.key_version instead of hardcoded 0
+            let id = Identity::derive(
+                passphrase,
+                &args.namespace,
+                args.key_version,
+                args.sub_id.as_deref(),
+            )?;
             id.write_private_key_hex_file(&output.0, args.force)?;
             let vk: VerifyingKey = id.verifying_key();
             write_public_key(&output.1.unwrap(), &vk.to_bytes(), args.force)?;
@@ -175,8 +187,15 @@ pub fn derive(
         }
         KeyAlgorithm::Aes256Gcm => {
             ensure_writable(&output.0, args.force)?;
-            let salt =
-                Sha256::digest(format!("{}|{:?}|cry:derive", args.namespace, args.algo).as_bytes());
+            // FIX 2: include namespace, key_version, sub_id, and algo in the
+            // salt so that different --sub-id or --key-version values produce
+            // distinct AES keys, consistent with the Ed25519 path.
+            let sub_id_part = args.sub_id.as_deref().unwrap_or("");
+            let salt_input = format!(
+                "cry:derive:aes256gcm|ns={}|ver={}|sub={}",
+                args.namespace, args.key_version, sub_id_part,
+            );
+            let salt = Sha256::digest(salt_input.as_bytes());
             let mut okm = [0u8; 32];
             Argon2::new(
                 Algorithm::Argon2id,
