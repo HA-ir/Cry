@@ -115,7 +115,7 @@ enum Command {
     /// Prerequisites: `ssh` and `ssh-agent` must be on PATH.
     ///
     /// The public key to add to the server's authorized_keys is printed
-    /// by `cry identity [--namespace NAME] --ssh`.
+    /// by `cry derive [--namespace NAME] --openssh`.
     #[command(name = "ssh")]
     Ssh(ssh::SshArgs),
 }
@@ -346,7 +346,7 @@ fn main() {
             section("🔑", "KDF", "Argon2id  (64 MiB · 3 iter · 1 thread)");
             eprintln!("  \x1b[2mℹ  To add the public key to the server, run:\x1b[0m");
             eprintln!(
-                "  \x1b[2m   cry identity -n {} --ssh\x1b[0m",
+                "  \x1b[2m   cry derive -n {} --openssh\x1b[0m",
                 args.namespace
             );
             divider();

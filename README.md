@@ -151,7 +151,7 @@ cry ssh user@host -- -o StrictHostKeyChecking=accept-new
 
 What happens under the hood:
 
-1. Argon2id derives a 32-byte seed from the passphrase (same as `cry identity`).
+1. Argon2id derives a 32-byte seed from the passphrase (same as old `cry identity`).
 2. An Ed25519 keypair is produced from the seed.
 3. A fresh `ssh-agent` subprocess is spawned.
 4. The keypair is injected into the agent over a Unix socket (in-memory transfer).

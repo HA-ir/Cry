@@ -410,7 +410,7 @@ pub struct VerifyArgs {
     #[arg(short = 's', long = "signature", value_name = "HEX")]
     pub signature: String,
 
-    /// Public key to verify against (hex, as printed by `cry identity`)
+    /// Public key to verify against (hex, as printed by `cry derive`)
     #[arg(short = 'k', long = "public-key", value_name = "HEX")]
     pub public_key: String,
 }
