@@ -352,8 +352,8 @@ impl TempKeyFile {
         let acl_ok = Command::new("icacls")
             .args([
                 path.to_str().unwrap_or(""),
-                "/inheritance:r",       // remove inherited ACEs
-                "/grant:r",             // replace (not append) explicit grant
+                "/inheritance:r",         // remove inherited ACEs
+                "/grant:r",               // replace (not append) explicit grant
                 &format!("{username}:F"), // full control for current user only
             ])
             .stdout(std::process::Stdio::null())

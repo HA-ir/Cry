@@ -293,7 +293,6 @@ fn main() {
                 let content = std::fs::read(&args.file).map_err(CryError::Io)?;
                 crydna::verify_content_signature(&args.public_key, &content, &args.signature)?;
 
-
                 kv("File", &args.file.display().to_string());
                 kv("Public key", &args.public_key);
                 kv(
@@ -306,7 +305,9 @@ fn main() {
                 );
                 divider();
 
-                eprintln!("  \x1b[32m✔\x1b[0m  Signature is \x1b[1mVALID\x1b[0m — file is authentic and untampered.");
+                eprintln!(
+                    "  \x1b[32m✔\x1b[0m  Signature is \x1b[1mVALID\x1b[0m — file is authentic and untampered."
+                );
                 Ok(())
             })();
 

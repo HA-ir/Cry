@@ -273,15 +273,13 @@ pub fn verify_content_signature(
     h.update(&content_hash);
     let msg_hash = h.finalize();
 
-    verifying_key
-        .verify(&msg_hash, &signature)
-        .map_err(|_| {
-            CryError::VerificationFailed(
-                "Signature is invalid — file may have been tampered with, \
+    verifying_key.verify(&msg_hash, &signature).map_err(|_| {
+        CryError::VerificationFailed(
+            "Signature is invalid — file may have been tampered with, \
                  or the wrong public key was supplied."
-                    .into(),
-            )
-        })
+                .into(),
+        )
+    })
 }
 
 // ---------------------------------------------------------------------------
