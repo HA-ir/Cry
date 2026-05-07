@@ -190,6 +190,7 @@ cry ssh user@host -- -o StrictHostKeyChecking=accept-new
 **What happens under the hood (Windows):**
 
 1–2 are the same. Then:
+
 3. The private key PEM is written to a restricted temp file in `%TEMP%`. ACLs are applied _before_ key data is written.
 4. `ssh -i <tempfile>` is run.
 5. On exit, the temp file is overwritten with zeros, flushed, and deleted.
